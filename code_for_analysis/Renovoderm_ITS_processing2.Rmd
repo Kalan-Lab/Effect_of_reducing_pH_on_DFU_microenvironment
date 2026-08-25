@@ -23,9 +23,9 @@ library (BiocManager)
 ```{r}
 #create phyloseq objects
 F_ps_raw <- qza_to_phyloseq(
-  features = "C:/Users/laure/OneDrive - McMaster University/Kalan_lab_CO-OP/Renovoderm/ITS/final/transfer/table-dada2-0_97_clust.qza", 
-  taxonomy = "C:/Users/laure/OneDrive - McMaster University/Kalan_lab_CO-OP/Renovoderm/ITS/final/transfer/taxonomy/classification.qza",
-  metadata = "C:/Users/laure/OneDrive - McMaster University/Kalan_lab_CO-OP/Renovoderm/metadata/Renovoderm_metadata_clean.txt")
+   features = "C:/Projects/Renovoderm/files/otu_table_ITS.qza", 
+  taxonomy = "C:/Projects/Renovoderm/files/Taxonomy_table_ITS.qza", 
+  metadata = "C:/Projects/Renovoderm/files/Renovoderm_metadata_clean.txt")
 
 #check 
 print(F_ps_raw)

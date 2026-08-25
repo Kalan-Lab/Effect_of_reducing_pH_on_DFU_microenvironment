@@ -193,3 +193,12 @@ qiime taxa barplot \
 
 #run 
 bash classify.sh
+
+#rename files
+cd cluster
+mv table-dada2_clust97.qza otu_table_16S.qza
+mv TaxonomyFinal_clust99_gtdb.qza Taxonomy_table_16S.qza
+
+#transfer to project folder connected to git
+mv otu_table_16S.qza /mnt/c/Projects/Renovoderm/files
+mv Taxonomy_table_16S.qza /mnt/c/Projects/Renovoderm/files

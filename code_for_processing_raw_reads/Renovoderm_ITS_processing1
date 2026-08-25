@@ -246,3 +246,7 @@ qiime phylogeny align-to-tree-mafft-fasttree \
 
 #run
 bash classify.sh
+
+#transfer to project folder connected to git
+mv otu_table_ITS.qza /mnt/c/Projects/Renovoderm/files
+mv Taxonomy_table_ITS.qza /mnt/c/Projects/Renovoderm/files
