@@ -1,0 +1,248 @@
+Renovoderm_ITS_processing1
+
+#Activate qiime
+conda activate qiime2-amplicon-2025.10
+
+#create new directory to process samples and move into that directory
+mkdir processed_16Sdata
+cd processed_16Sdata
+
+#create new directory to save fastqs after fastp 
+mkdir trimmed
+
+###fastp
+#Create fastp for cleaning in text editor (nano). create output files first. Create loop for fastp analysis
+nano fastp
+
+#open file with fastq files
+cd /workspace/lab/kalanlab/liel/Renovoderm/ITS_fastqs
+
+#make folder
+mkdir fastQC_before_fastp
+
+#run fastq on raw sequences and save summary results to fastQC folder - run this for a refence of quality before fastp
+fastqc *.fastq.gz -o fastQC_before_fastp
+
+#move to fastQC directory
+cd fastQC_before_fastp
+
+#run multiqc on current directory 
+multiqc .
+
+#move to folder with fastq files
+cd /workspace/lab/kalanlab/liel/Renovoderm/ITS_fastqs
+
+#run fastp 
+for i in `ls *R1_001.fastq.gz | sed 's/.fastq.gz//g'`;
+do
+ j=`echo ${i} | sed 's/R1_001/R2_001/g'`
+ fastp -q 25 --trim_poly_g --detect_adapter_for_pe -i ${i}.fastq.gz -I ${j}.fastq.gz -o /workspace/lab/kalanlab/liel/Renovoderm/ITS/processed_ITSdata/trimmed/${i}_t.fastq.gz -O /workspace/lab/kalanlab/liel/Renovoderm/ITS/processed_ITSdata/trimmed/${j}_t.fastq.gz
+done
+
+#move to working directory with reads after fastp
+cd /workspace/lab/kalanlab/liel/Renovoderm/ITS/processed_ITSdata/trimmed
+
+#make new directory
+mkdir -p fastQC_after_fastp
+
+#run fastqc
+fastqc *.fastq.gz -o fastQC_after_fastp
+
+#run multiqc
+multiqc .
+
+#run fastp on samples
+bash fastp
+
+##Make manifest file for mapping paired end reads
+# Write script to create manifest file:
+nano manifest.py 
+
+import os
+
+#provide directory where  trimmed fastq files are located
+directory = "workspace/lab/kalanlab/liel/Renovoderm/ITS/processed_ITSdata/trimmed/"
+
+# Output file
+output_file = "manifest.txt"
+
+#open output file for writing 
+with open(output_file, 'w') as f:
+	#write header
+	f.write("sample-id,absolute-filepath,direction\n")
+
+	#loop through files in directory
+	for filename in os.listdir(directory):
+		if filename.endswith("_R1_001_t.fastq.gz"):
+			#extract sample-id (before_S) and create absolute path
+			sample_id = filename.split("_S")[0]
+			abs_path = os.path.join(directory, filename)
+
+			#write forward read
+			f.write(f"{sample_id},{abs_path},forward\n")
+
+			#create reverse filename
+			reverse_filename = filename.replace("_R1_001_t.fastq.gz", "_R2_001_t.fastq.gz")
+			reverse_abs_path = os.path.join(directory, reverse_filename)
+
+			#write reverse read
+			f.write(f"{sample_id},{reverse_abs_path},reverse\n")
+#print when manifest file created successfully			
+print(f"Formatted file saved as {output_file}")
+
+#run script 
+python3 manifest.py
+
+#check manifest mapped R1 and R2 reads correctly
+ head -n 30 manifest.txt
+
+# Import manifest.txt into a qiime readable format 
+qiime tools import \
+  --type "SampleData[PairedEndSequencesWithQuality]" \
+  --input-format PairedEndFastqManifestPhred33\
+  --input-path manifest.txt \
+  --output-path sequences_q25.qza
+
+#check sequences for empty samples (next steps will fail if any empty samples)
+qiime demux summarize \
+  --i-data sequences_q25.qza \
+  --o-visualization sequences.qzv
+
+#remove empty samples
+cat manifest.txt | grep -Ev '^LK-ITS-(2|13|63),' manifest.txt > manifest_clean.txt
+cat manifest_clean.txt
+
+#Import manifest_clean.txt into a qiime readable format 
+qiime tools import \
+  --type "SampleData[PairedEndSequencesWithQuality]" \
+  --input-format PairedEndFastqManifestPhred33\
+  --input-path manifest_clean.txt \
+  --output-path sequences_q25.qza
+
+
+ ##ITSxpress: trim reads to known ITS regions
+
+ #make new directory to save reads after ITSxpress
+ mkdir ITSxpress
+ cd ITSxpress
+
+ nano ITSxpress.sh
+
+#trim to known ITS1 start and stop sequences
+qiime itsxpress trim-pair-output-unmerged\
+  --i-per-sample-sequences sequences_q25.qza \
+  --p-region ITS1 \
+  --p-taxa F \
+  --p-cluster-id 1 \
+  --p-threads 6 \
+  --o-trimmed trimmed_exact.qza /
+  --output-dir ITSxpress
+
+  #view at trimmed reads
+  qiime demux summarize \
+  --i-data trimmed_exact.qza \
+  --o-visualization trimmed_exact.qzv
+
+ #run
+ bash ITSxpress.sh
+
+##DADA2
+nano DADA2.sh
+
+#denoise, merge and trim by quality score with DADA2
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs trimmed_exact.qza \
+  --p-max-ee-f 8 \
+  --p-max-ee-r 8 \
+  --p-trunc-q 8 \
+  --p-trunc-len-r 0 \
+  --p-trunc-len-f 0 \
+  --output-dir dadaout_ITSxpress
+
+#chekc results
+qiime metadata tabulate \
+        --m-input-file denoising_stats.qza \
+        --o-visualization denoising_stats.qzv
+qiime feature-table summarize \
+        --i-table table.qza \
+        --o-visualization table_summarize.qzv
+qiime feature-table tabulate-seqs \
+        --i-data epresentative_sequences.qza \
+        --o-visualization rep-seqs-summary.qzv
+
+#run
+bash DADA2.sh
+
+##Remove short sequences: improves classification and removes noise during analysis
+nano filter_reads.sh
+
+#only keep reads greater than or equal to 100bp
+qiime rescript filter-seqs-length \
+  --i-sequences dadaout_ITSxpress/representative_sequences.qza \
+  --p-global-min 100 \
+  --o-filtered-seqs  rep-seqs-length-filtered.qza \
+  --o-discarded-seqs discard_filtered.qza
+
+#remove filtered out reads from feature table
+qiime feature-table filter-features \
+  --i-table dadaout_ITSxpress/table.qza \
+  --m-metadata-file rep-seqs-length-filtered.qza \
+  --o-filtered-table table-length-filtered.qza
+
+##Cluster reads into 97% OTUs
+nano cluster.sh
+
+#cluster
+qiime vsearch cluster-features-de-novo \
+  --i-sequences rep-seqs-length-filtered.qza \
+  --i-table table-length-filtered.qza \
+  --p-perc-identity 0.97 \
+  --o-clustered-table table-dada2-0_97_clust.qza \
+  --o-clustered-sequences rep-seqs-dada2-0_97_clust.qza
+
+#view results
+  qiime feature-table tabulate-seqs \
+  --i-data rep-seqs-dada2-0_97_clust.qza \
+  --o-visualization rep_seqs.qzv
+  qiime tools view rep_seqs.qzv
+
+  qiime feature-table summarize \
+  --i-table table-dada2-0_97_clust.qza \
+  --o-visualization table_summary.qzv
+  qiime tools view table_summary.qzv
+
+#run
+bash cluster.sh
+
+#Classify reads using BLAST with Unite database for fungi
+nano classify.sh 
+
+qiime feature-classifier classify-consensus-blast \
+  --p-evalue 0.000001 \
+  --p-min-consensus 0.8 \
+  --p-query-cov 0.97 \
+  --i-query rep-seqs-dada2-0_97_clust.qza \
+  --i-reference-reads /workspace/lab/kalanlab/liel/Renovoderm/ITS/processed_ITSdata/trimmed/classifiers/UNITE_public_19.02.2025.qza \
+  --i-reference-taxonomy /workspace/lab/kalanlab/liel/Renovoderm/ITS/processed_ITSdata/trimmed/classifiers/UNITE_public_taxonomy_modi2_19.02.2025.qza \
+  --p-perc-identity 0.97 \
+  --output-dir taxonomy97\
+  --verbose
+
+#view table
+qiime metadata tabulate \
+  --m-input-file taxonomy97/classification.qza\
+  --o-visualization classification.qzv
+
+#View distribution of taxa in each sample
+qiime taxa barplot \
+  --i-table table-dada2-0_97_clust.qza \
+  --i-taxonomy taxonomy97/classification.qza \
+  --o-visualization barplot_blast_final_filter.qzv
+  
+#Make phylogenic tree
+qiime phylogeny align-to-tree-mafft-fasttree \
+--i-sequences rep-seqs-dada2-0_97_clust.qza \
+--output-dir tree
+
+#run
+bash classify.sh

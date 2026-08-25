@@ -1,0 +1,1324 @@
+---
+title: "Renovoderm_Final_figures"
+author: "Lauren"
+date: "2026-07-04"
+output: html_document
+---
+#Activate packages
+```{r}
+library("readxl")
+library("ggplot2")
+library("ggpubr")
+library("dplyr")
+library("patchwork")
+library("phyloseq")
+library("RColorBrewer")
+library("vegan")
+library("reshape2")
+library("tidyverse")
+```
+#Import metadata
+```{r}
+#upload metadata as a data frame
+metadata_df <-as.data.frame(read_excel("C:/Users/laure/OneDrive - McMaster University/Kalan_lab_CO-OP/Renovoderm/metadata/Renovoderm_metadata_clean.xlsx", na = "N/A"))
+
+metadata_df
+```
+
+#Subset metadata
+```{r}
+#keep only wound samples and remove duplicates from 16S and ITS IDs
+w_metadata_df <- subset(metadata_df, Swab_type == "Wound" & grepl("^LK-16S", metadata_df$Sample_id))
+w_metadata_df
+
+#keep only Visit 1 samples
+V1_metadata_df <- subset(w_metadata_df, Visit =="V1")
+```
+
+#Table 1 calculations
+```{r}
+V1_metadata_df$preD_pH <- as.numeric(V1_metadata_df$preD_pH)
+V1_metadata_df$postD_volume <- as.numeric(V1_metadata_df$postD_volume)
+V1_metadata_df$BMI <- as.numeric(V1_metadata_df$BMI)
+V1_metadata_df$HbA1c <- as.numeric(V1_metadata_df$HbA1c)
+V1_metadata_df$Age <- as.numeric(V1_metadata_df$Age)
+
+#calculate range, mean, standard deviation of continuous variables
+Tab1 <- V1_metadata_df %>%
+  summarise(
+    mean(Age),
+    range(Age),
+    range(Wound_duration),
+    mean(Wound_duration),
+    range(preD_pH),
+    mean(preD_pH),
+    range(postD_volume),
+    mean(postD_volume),
+    mean(BMI),
+    sd(BMI),
+    mean(HbA1c),
+    sd(HbA1c))
+Tab1
+
+#calculate observations and percentage for levels within categorical variables
+cols <- c("Sex", "Smoker", "Wagner_grade")
+
+Tab1_cat <- map_dfr(cols, \(x) {
+  V1_metadata_df %>%
+    count(level = .data[[x]]) %>%
+    mutate(
+      variable = x,
+      percent = n / sum(n) * 100
+    ) %>%
+    select(variable, level, n, percent)})
+Tab1_cat   
+```
+#check normality
+```{r}
+#check distribution of values with histogram
+w_metadata_df$preD_pH <- as.numeric(w_metadata_df$preD_pH)
+hist(w_metadata_df$preD_pH)
+
+w_metadata_df$postD_volume <- as.numeric(w_metadata_df$postD_volume)
+hist(w_metadata_df$postD_volume)
+
+#shapiro wilk test (if p value < 0.05 variable has non-normal distribution)
+shapiro.test(w_metadata_df$postD_volume)
+
+shapiro.test(w_metadata_df$preD_pH)
+```
+
+#Figure 2: Wound pH and volume 
+#2A: changes in pH across visits
+```{r}
+#set variable numeric
+w_metadata_df$preD_pH <- as.numeric(w_metadata_df$preD_pH)
+
+#define comparisons
+comparisons <- list(c("V1", "V3"), c("V1", "V5"), c("V3", "V5"))
+
+#perform wilcox test and remove non-significant comparisons
+stats <- compare_means(preD_pH~Visit, data = w_metadata_df,
+                       method = "wilcox",
+                       comparisons=comparisons) %>%
+  filter(p<=0.05) %>%
+  mutate(y.position = c(8.8, 9.2, 9.7)) #position of significant labels on ggplot
+
+#make box plot
+pH_visits <- ggplot(w_metadata_df, aes(x=Visit, y = preD_pH, fill = Visit)) +
+  geom_boxplot() +
+  geom_line(aes(group = Subject_id), color = "gray40")+
+  geom_point(aes(fill = Visit), shape = 21, color = "black", size = 2.5)+
+  scale_y_continuous(breaks = c(4, 5, 6, 7, 8, 9))+
+  stat_pvalue_manual(stats, label = "p.signif", size = 6)+
+  scale_fill_brewer(palette = "Blues")+
+  labs(y = "Wound pH", x = "Visit") +
+  theme_classic() +
+  theme(axis.text = element_text(size = 14), axis.title = element_text(size = 16), legend.text = element_text(size = 14), legend.title = element_text(size = 16)) 
+  
+pH_visits
+```
+
+#2B: Changes in volume across visits
+```{r}
+#if post-debridement volume is NA change to pre-debridement volume. Accounts for wounds that healed and were not debrided
+w_metadata_df <- w_metadata_df %>%
+  mutate(postD_volume = ifelse(is.na(postD_volume), preD_volume, postD_volume))
+w_metadata_df
+
+#set variable numeric
+w_metadata_df$postD_volume<- as.numeric(w_metadata_df$postD_volume)
+
+#define comparisons
+comparisons <- list(c("V1", "V3"), c("V1", "V5"), c("V3", "V5"))
+
+#perform wilcox test and remove non-significant comparisons
+stats <- compare_means(postD_volume~Visit, data = w_metadata_df,
+                       method = "wilcox",
+                       comparisons=comparisons) %>%
+  filter(p<=0.05) %>%
+  mutate(y.position = c(5.5))
+
+#make box plot
+volume_visits <- ggplot(w_metadata_df, aes(x=Visit, y = postD_volume, fill = Visit)) +
+  geom_boxplot() +
+  geom_line(aes(group = Subject_id), color = "gray40")+
+  geom_point(aes(fill = Visit), shape = 21, color = "black", size = 2.5)+
+  scale_y_continuous(breaks = c(0, 1, 2, 3, 4, 5))+
+  stat_pvalue_manual(stats, label ="p.signif", size = 6)+
+  scale_fill_brewer(palette = "Blues")+
+  labs(y = "Wound Volume (cm³)", x = "Visit") +
+  theme_classic() +
+  theme(axis.text = element_text(size = 14), axis.title = element_text(size = 16), legend.text = element_text(size = 14), legend.title = element_text(size = 16)) 
+  
+volume_visits
+```
+
+#2C: Correlation between wound pH and volume
+#determine pearson's coefficient
+```{r}
+#set variable to numeric
+V1_metadata_df$preD_pH <- as.numeric(V1_metadata_df$preD_pH) 
+V1_metadata_df$postD_volume <- as.numeric(V1_metadata_df$postD_volume) 
+
+#shapiro-wilk normality test for pH
+shapiro.test(V1_metadata_df$preD_pH)
+
+#shapiro-wilk normality test for volume
+shapiro.test(V1_metadata_df$postD_volume)
+
+#Pearson's correlation test
+cor <- cor.test(V1_metadata_df$preD_pH, V1_metadata_df$postD_volume, method = "pearson")
+cor
+```
+#linear regression model
+```{r}
+#run linear regression
+pH_volume_lm <- lm(preD_pH~postD_volume, data = V1_metadata_df)
+
+#diagnostic plots
+plot(pH_volume_lm)
+
+#coefficients and anova
+summary(pH_volume_lm)
+anova(pH_volume_lm)
+```
+
+#plot pH and volume
+```{r}
+pH_volume<- ggplot(V1_metadata_df, aes(x = postD_volume, y = preD_pH)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "blue", se = FALSE) +
+  theme_classic(base_size = 14) +
+  labs(y = "Wound pH", x = "Wound Volume (cm³)")+
+  stat_cor(method = "pearson",
+    aes(label = paste(..r.label.., ..p.label.., sep = "~`,`~")))+
+  theme(axis.text = element_text(size = 14), axis.title = element_text(size = 16), legend.text = element_text(size = 14), legend.title = element_text(size = 16))  
+pH_volume
+```
+
+#merge figure 2:
+```{r}
+figure2 <- pH_visits|volume_visits|pH_volume  & theme(plot.margin = margin(t = 20, l = 2, r = 2, b = 1))
+figure2
+```
+#Save plots
+```{r}
+#save plot as pdf
+setwd("C:/Users/laure/OneDrive - McMaster University/Kalan_lab_CO-OP/Renovoderm/Paper/Figures")
+
+pdf(file = "figure2.pdf", width = 13.33, height = 5) # Adjust dimensions as needed
+print(figure2) # Replace with your plot object
+dev.off()
+#Save as image
+png(filename = "figure2.png", width = 4000, height = 1500, res = 300)
+print(figure2) # Replace with your actual graph object
+dev.off()
+```
+
+#Figure 3: bacterial and fungal overview
+#3A: bacterial relative abundance plot
+#remove low abundant features
+```{r}
+#extract otu table
+B_clean_wound_ps <-B_ps_nr_min23000genus
+B_wound_otu <- otu_table(B_clean_wound_ps)
+
+#remove features with few counts
+B_clean_wound_otu <- B_wound_otu[rowSums(B_wound_otu) > 20,]
+
+#check number and percent of features lost  
+print("wound lost features")
+lost_h=nrow(otu_table(B_wound_otu))-nrow(B_clean_wound_otu)
+lost_h
+lost_h/nrow(B_wound_otu)*100
+
+#check count summary to confirm proper filtering
+print("wound sample count distribution")
+summary(rowSums(B_clean_wound_otu))
+
+#update phyloseq object
+otu_table(B_clean_wound_ps) <- B_clean_wound_otu
+```
+
+#calculate relative abundance
+```{r}
+#Transform counts to relative abundance
+B_ps_rel_abundance <- transform_sample_counts(B_clean_wound_ps, function(x) x*100 / sum(x))
+
+#merge ps into df
+B_ps_tab_genus_df = psmelt(B_ps_rel_abundance)
+```
+
+#Identify top abundant genera and distribution of counts
+```{r}
+#summarize total abundance for each genera
+B_top_genus <- B_ps_tab_genus_df %>%
+  group_by(Genus) %>%
+  summarize(TotalAbundance = sum(Abundance, na.rm = TRUE)) %>%
+  arrange(desc(TotalAbundance)) %>%
+  slice_head(n = 15)  #Select the top 15 genera
+
+#create list of top 15 genera
+B_top_genus_names <- B_top_genus$Genus
+
+#order highest to lowest abundance
+B_top_genus <- B_top_genus %>%
+  mutate(Genus = factor(Genus, levels = Genus))
+
+#plot overall most abundant
+bacteria_plot<-ggplot(B_top_genus, aes(x=Genus, y=TotalAbundance))+
+  geom_bar(stat="identity") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels
+  labs(title="Top 15 abundant bacterial genus in wound samples", x = "genus", y = "Added relative abundances")
+bacteria_plot
+```
+
+#change genera outside of top 15 to z_other
+```{r}
+#convert genus to character
+B_ps_tab_genus_df$Genus<-as.character(B_ps_tab_genus_df$Genus)
+
+#rename genera not in the top 15 to other
+B_ps_tab_genus_df$Genus[!B_ps_tab_genus_df$Genus %in% B_top_genus_names] <- "Other"
+
+#assign levels based on abundance
+B_ps_tab_genus_df <- B_ps_tab_genus_df %>%
+  mutate(Genus = factor(Genus, levels = c(B_top_genus_names, "Other")))
+
+#Check the unique genera and their count
+unique(B_ps_tab_genus_df$Genus)
+length(unique(B_ps_tab_genus_df$Genus))
+```
+#assign colours
+```{r}
+#summarize by Genus
+colour_complete_df <- B_ps_tab_genus_df %>% group_by(Genus)
+
+#ensure genus is a factor
+colour_complete_df$Genus <- as.factor(colour_complete_df$Genus)
+
+#define a custom color palette
+custom_colors <- c("#673AB7", "#FFC107","#FF6E40", "#D81B60", "#AED581", "#B39DDB", "#F48FB1", "#01579B", "#49D1BD", "#21837C", "#FFF59D",  "#BBDEFB", "#F06292", "#64B5F6","#1B5E20","#858483")
+
+#Create a named vector for the custom colors
+names(custom_colors) <- levels(colour_complete_df$Genus)
+
+#Get the number of distinct levels (orders)
+num_levels <- length(levels(colour_complete_df$Genus))
+
+#Use only as many colors as you have levels
+B_rel_ps_Genus_colors <- custom_colors[1:num_levels]
+
+B_rel_ps_Genus_colors  
+```
+#plot relative abundance 
+```{r}
+#Ensure variables are factors
+B_ps_tab_genus_df$Subject_id <- factor(B_ps_tab_genus_df$Subject_id)
+
+#set levels to visits for chronological order
+B_ps_tab_genus_df$Visit <- factor(B_ps_tab_genus_df$Visit,
+                                 levels = c("V1", "V3", "V5"))
+
+#create plot
+Bacterial_Genus_plot<- ggplot(B_ps_tab_genus_df, aes(x=Visit, y=Abundance, fill =Genus))+
+  geom_bar(stat="identity", aes(fill=Genus))+
+  labs(x="Wound samples", y="% Relative Abundance", fill="Top 15 Bacterial Genera")+
+  facet_wrap(~ Subject_id, scales = "free_x", nrow = 2)+
+  theme_bw() +
+  guides(fill = guide_legend(ncol=2))+
+  theme(legend.box = "vertical",legend.key.width = unit(0.5, "cm"))+
+  theme(axis.text = element_text(size = 10), axis.title = element_text(size = 16), legend.text = element_text(size = 11), legend.title = element_text(size = 14), strip.text = element_text(size = 12)) +
+  scale_fill_manual(values=B_rel_ps_Genus_colors)
+Bacterial_Genus_plot
+```
+
+#3B: Bacterial Bray-Curtis NMDS plot - subject
+#statistical testing: check dispersion assumption and permanova
+```{r}
+#transform to relative abundance
+B_rel_abundance = transform_sample_counts(B_w_ps_rare_1, function(x) x*100/ sum(x))
+
+#set variable for testing
+sample_data(B_rel_abundance)$Subject_id <- as.factor(sample_data(B_rel_abundance)$Subject_id)
+x = "Subject_id"
+
+#make sure all rows have a value for column x
+meta <- as(sample_data(B_rel_abundance), "data.frame")
+meta_clean <- meta[!is.na(meta[[x]]), ] 
+sample_data(B_rel_abundance)<-meta_clean
+
+#calculate bray-curtis distance
+bray_dist <- distance(B_rel_abundance, method = "bray")
+
+#check dispersion assumption, if non-significant it means that the assumption of homogeniety of dispersion holds and we can proceed with permanova
+dispersion_result <- vegan::betadisper(bray_dist, sample_data(B_rel_abundance)[[x]]) 
+
+print("anova")
+anova(dispersion_result)
+
+print("TukeyHSD")
+TukeyHSD(dispersion_result)
+
+#PERMDISP - confirms dispersion assumption. Non-significant if meets the assumption.
+print("PERMDISP" )
+vegan::permutest(dispersion_result, permutations = 999)
+
+#Permanova result: p-value and Rsquared value (effect size).
+bray_dist <- distance(B_rel_abundance, method = "bray")
+permanova_result <- vegan::adonis2(bray_dist ~ Subject_id, data = as(sample_data(B_rel_abundance), "data.frame"))
+print(permanova_result)
+```
+#add ordination arrows between visits for each subjects
+```{r}
+#Run NMDS 
+B_ordination_result <- ordinate(B_rel_abundance, method='NMDS', distance='bray', k=4)
+
+#Check stress levels if >0.2 increase k. ideally <0.1
+B_ordination_result$stress
+
+#Extract NMDS coordinates
+ord_df <- as.data.frame(scores(B_ordination_result, display = "sites"))
+ord_df$Sample_id <- rownames(ord_df)
+
+#extract and merge metadata information with ordination results
+meta_df <- as.data.frame(sample_data(B_rel_abundance))
+meta_df$Sample_id <- rownames(meta_df)
+
+ord_df <- ord_df %>%
+  left_join(meta_df, by = "Sample_id")
+
+#ensure visit is properly ordered
+ord_df$Visit <- factor(ord_df$Visit, levels = c("V1","V3","V5"), ordered = TRUE)
+
+#create start and end coordinates for the arrows
+B_ord_arrows <- ord_df %>%
+  arrange(Subject_id, Visit) %>%
+  group_by(Subject_id) %>%
+  mutate(
+    NMDS1_end = lead(NMDS1),
+    NMDS2_end = lead(NMDS2),
+    Visit_end = lead(Visit)) %>%
+  filter(!is.na(NMDS1_end)) %>%
+  ungroup()
+```
+
+#plot nmds: changes for each subject
+```{r}
+#plot Axis 1 and Axis 2
+BC_NMDS_subject_B<-plot_ordination(B_rel_abundance, B_ordination_result, axes=c(1,2), color=x)+
+  geom_point(size=3) + 
+  geom_segment(
+    data = B_ord_arrows,
+    aes(x = NMDS1,
+        y = NMDS2,
+        xend = NMDS1_end,
+        yend = NMDS2_end),
+        alpha = 0.6,
+        arrow = arrow(length = unit(0.3, "cm"), type = "closed"),
+    color = "black") +
+  theme_bw(base_size = 14) +
+  scale_color_manual(values = c("#7C35B5", "#3255B8", "#7570b3","#BF2EB8","#DB3941","#F28C28", "#66a61e", "#27BBF5", "#854208", "#3A856F"))+
+  labs(color="Subject ID", title = "Bacteria")+
+  theme(axis.text = element_text(size = 10), axis.title = element_text(size = 12), legend.text = element_text(size = 12), legend.title = element_text(size = 14), title = element_text(size = 14)) 
+   
+BC_NMDS_subject_B
+```
+
+#3C: Fungi relative abundance plot
+#remove low abundant features
+```{r}
+#subset wound samples
+F_clean_wound_ps <- subset_samples(F_ps_nr_1200_genus, Swab_type =="Wound")
+
+#extract otu table
+F_wound_otu <- otu_table(F_clean_wound_ps)
+
+#remove features with few counts (also will remove features only found in intact skin samples)
+F_clean_wound_otu <- F_wound_otu[rowSums(F_wound_otu) > 20,]
+
+print("wound lost features")
+lost_h=nrow(otu_table(F_wound_otu))-nrow(F_clean_wound_otu)
+lost_h
+lost_h/nrow(F_wound_otu)*100
+
+#check summary
+print("wound sample count distribution")
+summary(rowSums(F_clean_wound_otu))
+
+#update phyloseq
+otu_table(F_clean_wound_ps) <- F_clean_wound_otu
+```
+
+#calculate relative abundance
+```{r}
+#Transform counts to relative abundance
+F_ps_rel_abundance <- transform_sample_counts(F_clean_wound_ps, function(x) x*100 / sum(x))
+
+#merge ps into df
+F_ps_tab_genus_df = psmelt(F_ps_rel_abundance)
+```
+
+#Identify top abundant genera
+```{r}
+#summarize total abundance for each genera
+F_top_genus <- F_ps_tab_genus_df %>%
+  group_by(Genus) %>%
+  summarize(TotalAbundance = sum(Abundance, na.rm = TRUE)) %>%
+  arrange(desc(TotalAbundance)) %>%
+  slice_head(n = 15)  # Select the top 15 genera
+
+F_top_genus_names <- F_top_genus$Genus
+
+#order highest to lowest
+F_top_genus <- F_top_genus %>%
+  mutate(Genus = factor(Genus, levels = Genus))
+
+#plot overall most abundant
+fungi_plot<-ggplot(F_top_genus, aes(x=Genus, y=TotalAbundance))+
+  geom_bar(stat="identity") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels
+  labs(title="Top 15 abundant fungal genus in wound samples", x = "genus", y = "Added relative abundances")
+fungi_plot
+```
+
+#change genera outside of top 15 to other
+```{r}
+#convert genus to character
+F_ps_tab_genus_df$Genus<-as.character(F_ps_tab_genus_df$Genus)
+
+#rename genera not in the top 15 to other
+F_ps_tab_genus_df$Genus[!F_ps_tab_genus_df$Genus %in% F_top_genus_names] <- "Other"
+
+#assign levels based on abundance
+F_ps_tab_genus_df <- F_ps_tab_genus_df %>%
+  mutate(Genus = factor(Genus, levels = c(F_top_genus_names, "Other")))
+
+#Check the unique genera and their count
+unique(F_ps_tab_genus_df$Genus)
+length(unique(F_ps_tab_genus_df$Genus))
+```
+#colours
+```{r}
+#summarize by Genus
+colour_complete_df <- F_ps_tab_genus_df %>% group_by(Genus)
+
+#ensure genus is a factor
+colour_complete_df$Genus <- as.factor(colour_complete_df$Genus)
+
+# Define a custom color palette
+custom_colors <- c(
+  "#01579B", "#AED581","#D81B60", "#673AB7", "#FFC107","#FF6E40", "#1B5E20", "#F06292", "#64B5F6",  "#B39DDB","#BBDEFB","#F48FB1","#49D1BD", "#21837C", "#FFF59D", "#858483")
+
+#Create a named vector for the custom colors
+names(custom_colors) <- levels(colour_complete_df$Genus)
+
+#Get the number of distinct levels (orders)
+num_levels <- length(levels(colour_complete_df$Genus))
+
+#Use only as many colors as you have levels
+F_rel_ps_Genus_colors <- custom_colors[1:num_levels]
+
+F_rel_ps_Genus_colors  
+```
+#plot relative abundance 
+```{r}
+#Ensure variables are factors
+F_ps_tab_genus_df$Subject_id <- factor(F_ps_tab_genus_df$Subject_id)
+
+F_ps_tab_genus_df$Visit <- factor(F_ps_tab_genus_df$Visit,
+                                 levels = c("V1", "V3", "V5"))
+
+#create plot
+Fungal_Genus_plot<- ggplot(F_ps_tab_genus_df, aes(x=Visit, y=Abundance, fill =Genus))+
+  geom_bar(stat="identity", aes(fill=Genus))+
+  labs(x="Wound samples", y="% Relative Abundance", fill="Top 15 Fungal Genera")+
+  facet_wrap(~ Subject_id, scales = "free_x", nrow = 2)+
+  theme_bw() +
+  guides(fill = guide_legend(ncol=2))+
+  theme(legend.box = "vertical",legend.key.width = unit(0.5, "cm"))+
+  theme(axis.text = element_text(size = 10), axis.title = element_text(size = 16), legend.text = element_text(size = 11), legend.title = element_text(size = 14), strip.text = element_text(size = 12)) +
+  scale_fill_manual(values=F_rel_ps_Genus_colors)
+Fungal_Genus_plot
+```
+
+#3D: Subject Fungal Bray-Curtis NMDS plot
+```{r}
+F_rare1<- F_ps_rare_1
+#over write the file
+F_ps_rare_1 <- F_ps_rare_2
+
+##need to save F_rare1 as F_ps_rare_2
+```
+
+#set testing parameters
+```{r}
+#set rownames as sample_id
+F_w_ps_rare_1 <- F_ps_rare_1
+sample_data(F_w_ps_rare_1)$Sample_id <- rownames(sample_data(F_w_ps_rare_1))
+
+#Subset wound samples
+F_w_ps_rare_1 <- subset_samples(F_w_ps_rare_1, Swab_type == "Wound")
+F_w_ps_rare_1 <- prune_taxa(taxa_sums(F_w_ps_rare_1) >0, F_w_ps_rare_1)
+
+#transform to relative abundance
+F_rel_abundance = transform_sample_counts(F_w_ps_rare_1, function(x) x*100/ sum(x))
+
+#set variable
+sample_data(F_rel_abundance)$Subject_id <- as.factor(sample_data(F_rel_abundance)$Subject_id)
+x = "Subject_id"
+
+#remove outlier samples (samples skew data preventing full representation of rest of samples)
+F_rel_abundance <- subset_samples(F_rel_abundance, !Sample_id %in% c("LK-ITS-19"))
+```
+
+#statistical testing: check dispersion assumption and permanova
+```{r}
+#make sure all rows have a value for column x
+meta <- as(sample_data(F_rel_abundance), "data.frame")
+meta_clean <- meta[!is.na(meta[[x]]), ] 
+sample_data(F_rel_abundance)<-meta_clean
+
+#calculate bray-curtis distance
+bray_dist <- distance(F_rel_abundance, method = "bray")
+
+#check dispersion assumption, if non-significant it means that the assumption of homogeniety of dispersion holds and we can proceed with permanova
+dispersion_result <- vegan::betadisper(bray_dist, sample_data(F_rel_abundance)[[x]]) 
+
+print("anova")
+anova(dispersion_result)
+
+print("TukeyHSD")
+TukeyHSD(dispersion_result)
+
+#PERMDISP - confirms dispersion assumption. Non-significant if meets the assumption.
+print("PERMDISP" )
+vegan::permutest(dispersion_result, permutations = 999)
+
+#Permanova result: p-value and Rsquared value (effect size).
+bray_dist <- distance(F_rel_abundance, method = "bray")
+permanova_result <- vegan::adonis2(bray_dist ~ Subject_id, data = as(sample_data(F_rel_abundance), "data.frame"))
+print(permanova_result)
+```
+#add ordination arrows between visits for each subjects
+```{r}
+#Run NMDS 
+F_ordination_result <- ordinate(F_rel_abundance, method='NMDS', distance='bray', k=4)
+
+#Check stress levels if >0.2 increase k. ideally <0.1
+F_ordination_result$stress
+
+#Extract NMDS coordinates
+ord_df <- as.data.frame(scores(F_ordination_result, display = "sites"))
+ord_df$Sample_id <- rownames(ord_df)
+
+#extract and merge metadata information with ordination results
+meta_df <- as.data.frame(sample_data(F_rel_abundance))
+meta_df$Sample_id <- rownames(meta_df)
+
+ord_df <- ord_df %>%
+  left_join(meta_df, by = "Sample_id")
+
+#ensure visit is properly ordered
+ord_df$Visit <- factor(ord_df$Visit, levels = c("V1","V3","V5"), ordered = TRUE)
+
+#create start and end coordinates for the arrows
+F_ord_arrows <- ord_df %>%
+  arrange(Subject_id, Visit) %>%
+  group_by(Subject_id) %>%
+  mutate(
+    NMDS1_end = lead(NMDS1),
+    NMDS2_end = lead(NMDS2),
+    Visit_end = lead(Visit)) %>%
+  filter(!is.na(NMDS1_end)) %>%
+  ungroup()
+```
+
+#plot nmds: changes for each subject
+```{r}
+#plot Axis 1 and Axis 2
+BC_NMDS_subject_F<-plot_ordination(F_rel_abundance, F_ordination_result, axes=c(1,2), color=x)+
+  geom_point(size=3) + 
+  geom_segment(
+    data = F_ord_arrows,
+    aes(x = NMDS1,
+        y = NMDS2,
+        xend = NMDS1_end,
+        yend = NMDS2_end),
+        alpha = 0.6,
+        arrow = arrow(length = unit(0.3, "cm"), type = "closed"),
+    color = "black") +
+  theme_bw(base_size = 14) +
+  scale_color_manual(values = c("#7C35B5", "#3255B8", "#7570b3","#BF2EB8","#DB3941","#F28C28", "#66a61e", "#27BBF5", "#854208", "#3A856F"))+
+  labs(color="Subject ID", title = "Fungi")+
+theme(axis.text = element_text(size = 10), axis.title = element_text(size = 12), legend.text = element_text(size = 12), legend.title = element_text(size = 14), title = element_text(size = 14)) 
+   
+BC_NMDS_subject_F
+```
+
+#merge figure 3
+```{r}
+#top row
+fig3_B <- Bacterial_Genus_plot / Fungal_Genus_plot +
+  plot_layout(widths = c(1,1), heights = c(1,1))
+
+#bottom row
+fig3_F <- BC_NMDS_subject_B / BC_NMDS_subject_F +
+  plot_layout(widths = c(1,1), heights = c(1,1))
+
+#merge
+figure3 <- fig3_B | fig3_F 
+figure3
+```
+
+#Save plots
+```{r}
+#save plot as pdf
+setwd("C:/Users/laure/OneDrive - McMaster University/Kalan_lab_CO-OP/Renovoderm/Paper/Figures")
+
+pdf(file = "figure3.pdf", width = 13.33, height = 8.33) # Adjust dimensions as needed
+print(figure3) # Replace with your plot object
+dev.off()
+#Save as image
+png(filename = "figure3.png", width = 4000, height = 2500, res = 300)
+print(figure3) # Replace with your actual graph object
+dev.off()
+```
+
+#Figure 4: baseline pH and wound volume
+
+#4A: BC NMDS baseline pH
+#statistical testing: check dispersion assumption and permanova
+```{r}
+#set variable
+x = "Baseline_pH"
+
+#make sure all rows have a value for column x
+meta <- as(sample_data(B_rel_abundance), "data.frame")
+meta_clean <- meta[!is.na(meta[[x]]), ] 
+sample_data(B_rel_abundance)<-meta_clean
+
+#calculate bray-curtis distance
+bray_dist <- distance(B_rel_abundance, method = "bray")
+
+#check dispersion assumption, if non-significant it means that the assumption of homogeniety of dispersion holds and we can proceed with permanova
+dispersion_result <- vegan::betadisper(bray_dist, sample_data(B_rel_abundance)[[x]]) 
+
+print("anova")
+anova(dispersion_result)
+
+print("TukeyHSD")
+TukeyHSD(dispersion_result)
+
+#PERMDISP - confirms dispersion assumption. Non-significant if meets the assumption.
+print("PERMDISP" )
+vegan::permutest(dispersion_result, permutations = 999)
+
+#Permanova result: p-value and Rsquared value (effect size).
+bray_dist <- distance(B_rel_abundance, method = "bray")
+permanova_result <- vegan::adonis2(bray_dist ~ Baseline_pH, data = as(sample_data(B_rel_abundance), "data.frame"))
+print(permanova_result)
+```
+
+#plot NMDS: baseline pH
+```{r}
+#plot Axis 1 and Axis 2
+BC_NMDS_pH<-plot_ordination(B_rel_abundance, B_ordination_result, axes=c(1,2), color=x)+
+  geom_point(size=3) + 
+  geom_segment(
+    data = B_ord_arrows,
+    aes(x = NMDS1,
+        y = NMDS2,
+        xend = NMDS1_end,
+        yend = NMDS2_end),
+        alpha = 0.6,
+        arrow = arrow(length = unit(0.3, "cm"), type = "closed"),
+    color = "black") +
+  theme_bw(base_size = 14) +
+  scale_color_manual(values = c("Basic" = "#5782B3", "Neutral" ="#82B357", "Acidic" = "#B35782" )) + 
+  labs(color = "Baseline pH", title = "Bacteria")+
+  theme(axis.text = element_text(size = 10), axis.title = element_text(size = 12), legend.text = element_text(size = 14), legend.title = element_text(size = 14), title = element_text(size = 14)) 
+   
+BC_NMDS_pH
+```
+
+#4B: Shannon diversity longitudinally with baseline pH
+#calculate alpha diversity
+```{r}
+#object
+B_chosen_ps <- B_w_ps_rare_1
+
+#calculate shannon diversity 
+alpha_df <- estimate_richness(B_chosen_ps, split = TRUE, measures = c("Shannon"))
+alpha_df$Sample_id <- rownames(alpha_df)
+
+#extract metadata from ps object
+metadata <- data.frame(sample_data(B_chosen_ps))
+metadata$Sample_id <- rownames(metadata)
+
+#merge alpha diversity measures and metadata 
+B_metadata_ad <- merge(metadata, alpha_df[, c("Sample_id", "Shannon")],
+  by = "Sample_id",
+  all.x = TRUE,
+  sort = FALSE)
+```
+
+#plot 
+```{r}
+#generate plot
+Visit_pH_ad <- ggplot(B_metadata_ad, aes(x=Visit, y=Shannon))+
+  geom_boxplot(fill = "white") +
+  geom_line(aes(group = Subject_id, color = Baseline_pH), linewidth = 1)+
+  geom_point(aes(color = Baseline_pH), size = 2.5) +
+  scale_y_continuous(limits = c(0,4), breaks = c(0, 1, 2, 3, 4))+
+  theme_classic() +
+  labs(color="Baseline pH", y=" Bacterial Shannon Index") +
+  scale_color_manual(values = c("Basic" = "#247EA6", "Neutral" ="#82B357", "Acidic" = "#B35782" )) + 
+  theme(axis.text = element_text(size = 14), axis.title = element_text(size = 16), legend.text = element_text(size = 14), legend.title = element_text(size = 14)) 
+
+Visit_pH_ad
+```
+
+#4C: Differences in alpha diversity between baseline pH groups
+```{r}
+#define comparisons for wilcox test
+comparisons <- list(c("Acidic","Basic"), c("Acidic","Neutral"), c("Basic","Neutral"))
+
+#perform wilcox test and remove non-significant comparisons
+stats <- compare_means(Shannon~Baseline_pH, data = B_metadata_ad,
+                       method = "wilcox",
+                       comparisons=comparisons) %>%
+  filter(p<=0.05) %>%
+  mutate(y.position = c(3.9))
+
+#generate plot
+pH_ad <- ggplot(B_metadata_ad, aes(x=Baseline_pH, y=Shannon, fill=Baseline_pH))+
+  geom_boxplot() +
+  geom_point(aes(fill = Baseline_pH), shape = 21, color = "black", size = 2.5)+
+  theme_classic() +
+  scale_y_continuous(breaks = c(0, 1, 2, 3, 4))+
+  scale_fill_manual(values = c("Basic" = "#5782B3", "Neutral" ="#82B357", "Acidic" = "#B35782" ), guide = "none") + 
+  stat_pvalue_manual(stats, label = "p.signif", size = 6)+ 
+  labs(fill = "Baseline pH", y = " Bacterial Shannon Index", x = "Baseline pH")+
+  theme(axis.text = element_text(size = 14), axis.title = element_text(size = 16), legend.text = element_text(size = 14), legend.title = element_text(size = 14)) 
+pH_ad
+```
+
+#4D: BC NMDS wound volume
+#statistical testing: check dispersion assumption and permanova
+```{r}
+#set variable
+sample_data(B_rel_abundance)$postD_volume <- as.numeric(sample_data(B_rel_abundance)$postD_volume)
+
+x = "postD_volume"
+
+#make sure all rows have a value for column x
+meta <- as(sample_data(B_rel_abundance), "data.frame")
+meta_clean <- meta[!is.na(meta[[x]]), ] 
+sample_data(B_rel_abundance)<-meta_clean
+
+#calculate bray-curtis distance
+bray_dist <- distance(B_rel_abundance, method = "bray")
+
+#check dispersion assumption, if non-significant it means that the assumption of homogeniety of dispersion holds and we can proceed with permanova
+dispersion_result <- vegan::betadisper(bray_dist, sample_data(B_rel_abundance)[[x]]) 
+
+print("anova")
+anova(dispersion_result)
+
+print("TukeyHSD")
+TukeyHSD(dispersion_result)
+
+#PERMDISP - confirms dispersion assumption. Non-significant if meets the assumption.
+print("PERMDISP" )
+vegan::permutest(dispersion_result, permutations = 999)
+
+#Permanova result: p-value and Rsquared value (effect size).
+bray_dist <- distance(B_rel_abundance, method = "bray")
+permanova_result <- vegan::adonis2(bray_dist ~ postD_volume, data = as(sample_data(B_rel_abundance), "data.frame"))
+print(permanova_result)
+```
+
+#plot NMDS: volume
+```{r}
+#plot Axis 1 and Axis 2
+BC_NMDS_volume_B<-plot_ordination(B_rel_abundance, ordination_result, axes=c(1,2), color = x)+
+  geom_point(aes(size= postD_volume))+ 
+  scale_size_continuous(range = c(3, 8), guide = "none") +
+  geom_segment(
+    data = B_ord_arrows,
+    aes(x = NMDS1,
+        y = NMDS2,
+        xend = NMDS1_end,
+        yend = NMDS2_end),
+        alpha = 0.6,
+        arrow = arrow(length = unit(0.3, "cm"), type = "closed"),
+    color = "black") +
+  theme_bw(base_size = 14) +
+  scale_color_viridis_c(option = "viridis", trans = "sqrt")+ 
+  labs(color = "Wound\nVolume (cm³)", title = "Bacteria")+
+  theme(axis.text = element_text(size = 10), axis.title = element_text(size = 12), legend.text = element_text(size = 14), legend.title = element_text(size = 14), title = element_text(size = 14))  
+   
+BC_NMDS_volume_B
+```
+
+#4E: Fungal Bray-Curtis NMDS wound volume
+#statistical testing: check dispersion assumption and permanova
+```{r}
+#set variable
+sample_data(F_rel_abundance)$postD_volume <- as.numeric(sample_data(F_rel_abundance)$postD_volume)
+
+x = "postD_volume"
+
+#make sure all rows have a value for column x
+meta <- as(sample_data(F_rel_abundance), "data.frame")
+meta_clean <- meta[!is.na(meta[[x]]), ] 
+sample_data(F_rel_abundance)<-meta_clean
+
+#calculate bray-curtis distance
+bray_dist <- distance(F_rel_abundance, method = "bray")
+
+#check dispersion assumption, if non-significant it means that the assumption of homogeniety of dispersion holds and we can proceed with permanova
+dispersion_result <- vegan::betadisper(bray_dist, sample_data(F_rel_abundance)[[x]]) 
+
+print("anova")
+anova(dispersion_result)
+
+print("TukeyHSD")
+TukeyHSD(dispersion_result)
+
+#PERMDISP - confirms dispersion assumption. Non-significant if meets the assumption.
+print("PERMDISP" )
+vegan::permutest(dispersion_result, permutations = 999)
+
+#Permanova result: p-value and Rsquared value (effect size).
+bray_dist <- distance(F_rel_abundance, method = "bray")
+permanova_result <- vegan::adonis2(bray_dist ~ postD_volume, data = as(sample_data(F_rel_abundance), "data.frame"))
+print(permanova_result)
+```
+
+#plot NMDS: volume
+```{r}
+#plot Axis 1 and Axis 2
+BC_NMDS_volume_F<-plot_ordination(F_rel_abundance, F_ordination_result, axes=c(1,2), color = x)+
+  geom_point(aes(size= postD_volume))+ 
+  scale_size_continuous(range = c(3, 8), guide = "none") +
+  geom_segment(
+    data = F_ord_arrows,
+    aes(x = NMDS1,
+        y = NMDS2,
+        xend = NMDS1_end,
+        yend = NMDS2_end),
+        alpha = 0.6,
+        arrow = arrow(length = unit(0.3, "cm"), type = "closed"),
+    color = "black") +
+  theme_bw(base_size = 14) +
+  scale_color_viridis_c(option = "viridis", trans = "sqrt")+ 
+  labs(color = "Wound\nVolume (cm³)", title = "Fungi")+
+  theme(axis.text = element_text(size = 10), axis.title = element_text(size = 12), legend.text = element_text(size = 14), legend.title = element_text(size = 14), title = element_text(size =  14))  
+   
+BC_NMDS_volume_F
+```
+
+#merge figure 4
+```{r}
+fig4_bp <- Visit_pH_ad + pH_ad + plot_layout(widths = c(1,1), guides = "collect")
+
+fig4_r <- fig4_bp/BC_NMDS_volume_F 
+fig4_b <- BC_NMDS_volume_B | BC_NMDS_volume_F + plot_layout(widths = c(1,1), heights = c(1,1))
+
+fig4_l <- BC_NMDS_pH/BC_NMDS_volume_B + plot_layout(widths = c(1,1), heights = c(1,1))
+
+figure4 <- fig4_l | fig4_r + plot_layout(widths = c(1,1)) 
+figure4
+```
+
+#Save plots
+```{r}
+#save plot as pdf
+setwd("C:/Users/laure/OneDrive - McMaster University/Kalan_lab_CO-OP/Renovoderm/Paper/Figures")
+
+pdf(file = "figure4.pdf", width = 13.33, height = 8.33) # Adjust dimensions as needed
+print(figure4) # Replace with your plot object
+dev.off()
+#Save as image
+png(filename = "figure4.png", width = 4000, height = 2500, res = 300)
+print(figure4) # Replace with your actual graph object
+dev.off()
+```
+
+#Figure 5: Immune markers
+#5A: changes in MCP-1 in relation to wound volume
+```{r}
+#ensure value is numeric
+w_metadata_df$MCP1 <- as.numeric(w_metadata_df$MCP1)
+
+#remove Na
+w_metadata_df_MCP1 <- w_metadata_df[!is.na(w_metadata_df$MCP1),]
+
+#make line plot
+MCP1 <- ggplot(w_metadata_df_MCP1, aes(x= Visit, y= MCP1, color= Baseline_volume))+
+  geom_line(aes(group = Subject_id), linewidth = 1)+
+  geom_point(size = 3)+
+  scale_color_viridis_c(option = "viridis", trans = "sqrt")+
+  labs(y = "MCP-1 Concentration (pg/mL)", color = "Baseline Wound\nVolume (cm³)")+
+  theme(axis.text = element_text(size = 14), axis.title = element_text(size = 16), legend.text = element_text(size = 14), legend.title = element_text(size = 16)) 
+  
+MCP1
+```
+
+#5B: changes in MIP1d in relation to wound volume
+```{r}
+#ensure value is numeric
+w_metadata_df$MIP1d <- as.numeric(w_metadata_df$MIP1d)
+
+#remove Na
+w_metadata_df_MIP1d <- w_metadata_df[!is.na(w_metadata_df$MIP1d),]
+
+#make line plot
+MIP1d<- ggplot(w_metadata_df_MIP1d, aes(x= Visit, y= MIP1d, group = Subject_id, color= Baseline_volume))+
+  geom_line(aes(group = Subject_id), linewidth = 1)+
+  geom_point(size = 3)+
+  #theme_classic() +
+  scale_color_viridis_c(option = "viridis", trans = "sqrt")+
+  labs(y = "MIP-1δ Concentration (pg/mL)", color = "Baseline Wound\nVolume (cm³)")+
+  theme(axis.text = element_text(size = 14), axis.title = element_text(size = 16), legend.text = element_text(size = 14), legend.title = element_text(size = 16)) 
+  
+MIP1d
+```
+
+#merge figure 5
+```{r}
+figure5 <- MCP1 + MIP1d +plot_layout(widths = c(1,1)) & theme(plot.margin = margin(t = 10, l=4))
+```
+
+#Save plots
+```{r}
+#save plot as pdf
+setwd("C:/Users/laure/OneDrive - McMaster University/Kalan_lab_CO-OP/Renovoderm/Paper/Figures")
+
+pdf(file = "figure5.pdf", width = 13.33, height = 5) # Adjust dimensions as needed
+print(figure5) # Replace with your plot object
+dev.off()
+#Save as image
+png(filename = "figure5.png", width = 4000, height = 1500, res = 300)
+print(figure5) # Replace with your actual graph object
+dev.off()
+```
+
+#Supplemental figure 1: longitudinal changes in alpha diversity
+#calculate alpha diversity for bacteria
+```{r}
+#object
+B_chosen_ps <- B_w_ps_rare_1
+
+#calculate shannon diversity 
+B_alpha_df <- estimate_richness(B_chosen_ps, split = TRUE, measures = c("Shannon", "Observed"))
+
+#add sample ID
+meta <- data.frame(sample_data(B_chosen_ps))
+B_alpha_df$Sample_id <- rownames(meta)
+
+#extract metadata from ps object
+meta$Sample_id <- rownames(meta)
+
+#merge alpha diversity measures and metadata 
+B_metadata_ad <- merge(meta, B_alpha_df[, c("Sample_id", "Shannon", "Observed")],
+  by = "Sample_id",
+  all.x = TRUE,
+  sort = FALSE)
+```
+
+#calculate alpha diversity for fungi
+```{r}
+#object
+F_chosen_ps <- F_w_ps_rare_1
+
+#calculate shannon diversity 
+F_alpha_df <- estimate_richness(F_chosen_ps, split = TRUE, measures = c("Shannon", "Observed"))
+
+#add sample ID
+meta <- data.frame(sample_data(F_chosen_ps))
+F_alpha_df$Sample_id <- rownames(meta)
+
+#extract metadata from ps object
+meta$Sample_id <- rownames(meta)
+
+#merge alpha diversity measures and metadata 
+F_metadata_ad <- merge(meta, F_alpha_df[, c("Sample_id", "Shannon", "Observed")],
+  by = "Sample_id",
+  all.x = TRUE,
+  sort = FALSE)
+```
+
+#S1A:bacterial observed
+```{r}
+#comparisons
+comparisons <- list(c("V1", "V3"), c("V1", "V5"), c("V3", "V5"))
+
+#perform wilcox test
+stats <- compare_means(Observed~Visit, data = B_metadata_ad,
+                       method = "wilcox",
+                       comparisons=comparisons)  %>%
+  mutate(y.position = c(110, 118, 129))
+
+#plot
+observed_B <- ggplot(B_metadata_ad, aes(x=Visit, y=Observed, fill=Visit))+
+  geom_boxplot()+
+  geom_line(aes(group = Subject_id), color = "gray40")+
+  geom_point(aes(fill = Visit), shape = 21, color = "black", size = 2.5)+
+  scale_y_continuous(breaks = c(0, 25, 50, 75, 100, 125))+
+  stat_pvalue_manual(stats, label="p.signif", size = 5)+
+  scale_fill_brewer(palette = "Blues") +
+  theme_classic() +
+  labs(y="Observed Bacterial OTUs")+
+  theme(axis.text = element_text(size = 14), axis.title = element_text(size = 16), legend.text = element_text(size = 14), legend.title = element_text(size = 16)) 
+observed_B
+```
+#S1B:bacterial Shannon
+```{r}
+#comparisons
+comparisons <- list(c("V1", "V3"), c("V1", "V5"), c("V3", "V5"))
+
+#perform wilcox test 
+stats <- compare_means(Shannon~Visit, data = B_metadata_ad,
+                       method = "wilcox",
+                       comparisons=comparisons)%>%
+  mutate(y.position = c(3.9, 4.2, 4.6))
+
+#plot
+shannon_B <- ggplot(B_metadata_ad, aes(x=Visit, y=Shannon, fill=Visit))+
+  geom_boxplot()+
+  geom_line(aes(group = Subject_id), color = "gray40")+
+  geom_point(aes(fill = Visit), shape = 21, color = "black", size = 2.5)+
+  stat_pvalue_manual(stats, label="p.signif", size = 5)+
+  scale_fill_brewer(palette = "Blues") +
+  theme_classic() +
+  labs(y="Bacterial Shannon Index")+
+  theme(axis.text = element_text(size = 14), axis.title = element_text(size = 16), legend.text = element_text(size = 14), legend.title = element_text(size = 16)) 
+shannon_B
+```
+
+#S1C:Fungal observed
+```{r}
+#comparisons
+comparisons <- list(c("V1", "V3"), c("V1", "V5"), c("V3", "V5"))
+
+#perform wilcoxon test
+stats <- compare_means(Observed~Visit, data = F_metadata_ad,
+                       method = "wilcox",
+                       comparisons=comparisons)%>%
+  mutate(y.position = c(52, 55, 60))
+
+#plot
+observed_F <- ggplot(F_metadata_ad, aes(x=Visit, y=Observed, fill=Visit))+
+  geom_boxplot()+
+  geom_line(aes(group = Subject_id), color = "gray40")+
+  geom_point(aes(fill = Visit), shape = 21, color = "black", size = 2.5)+
+  stat_pvalue_manual(stats, label = "p.signif", size = 5)+
+  scale_fill_brewer(palette = "Blues") +
+  theme_classic() +
+  labs(y="Observed Fungal OTUs")+
+  theme(axis.text = element_text(size = 14), axis.title = element_text(size = 16), legend.text = element_text(size = 14), legend.title = element_text(size = 16)) 
+observed_F
+```
+
+#S1D:Fungal Shannon
+```{r}
+#comparisons
+comparisons <- list(c("V1", "V3"), c("V1", "V5"), c("V3", "V5"))
+
+#perform wilcoxon test
+stats <- compare_means(Shannon~Visit, data = B_metadata_ad,
+                       method = "wilcox",
+                       comparisons=comparisons)%>%
+  mutate(y.position = c(3.9, 4.2, 4.6))
+
+#plot
+shannon_F <- ggplot(B_metadata_ad, aes(x=Visit, y=Shannon, fill=Visit))+
+  geom_boxplot()+
+  geom_line(aes(group = Subject_id), color = "gray40")+
+  geom_point(aes(fill = Visit), shape = 21, color = "black", size = 2.5)+
+  stat_pvalue_manual(stats, label = "p.signif", size = 5)+
+  scale_fill_brewer(palette = "Blues") +
+  theme_classic() +
+  labs(y="Fungal Shannon Index")+
+  theme(axis.text = element_text(size = 14), axis.title = element_text(size = 16), legend.text = element_text(size = 14), legend.title = element_text(size = 16)) 
+shannon_F
+```
+
+#merge supplemental figure 1
+```{r}
+supplemental_figure1 <- observed_B + shannon_B + observed_F + shannon_F +plot_layout(widths= c(1,1,1,1)) & theme(plot.margin = margin(t = 10, l=4, b=2))
+```
+
+#Save plots
+```{r}
+#save plot as pdf
+setwd("C:/Users/laure/OneDrive - McMaster University/Kalan_lab_CO-OP/Renovoderm/Paper/Figures")
+
+pdf(file = "supplemental_figure1.pdf", width = 13.33, height = 5) # Adjust dimensions as needed
+print(supplemental_figure1) # Replace with your plot object
+dev.off()
+#Save as image
+png(filename = "supplemental_figure1.png", width = 4000, height = 1500, res = 300)
+print(supplemental_figure1) # Replace with your actual graph object
+dev.off()
+```
+
+#Supplemental figure 2: comparing skin and wound bacterial and fungal communities
+
+#S2A: Bray-Curtis NMDS skin vs wound (bacterial)
+#statistical testing: check dispersion assumption and permanova
+```{r}
+#transform to relative abundance
+B_iw_rel_abundance = transform_sample_counts(B_ps_rare_1, function(x) x*100/ sum(x))
+
+#set variable
+x = "Swab_type"
+
+#make sure all rows have a value for column x
+meta <- as(sample_data(B_iw_rel_abundance), "data.frame")
+meta_clean <- meta[!is.na(meta[[x]]), ] 
+sample_data(B_iw_rel_abundance)<-meta_clean
+
+#calculate bray-curtis distance
+bray_dist <- distance(B_iw_rel_abundance, method = "bray")
+
+#check dispersion assumption, if non-significant it means that the assumption of homogeniety of dispersion holds and we can proceed with permanova
+dispersion_result <- vegan::betadisper(bray_dist, sample_data(B_iw_rel_abundance)[[x]]) 
+
+print("anova")
+anova(dispersion_result)
+
+print("TukeyHSD")
+TukeyHSD(dispersion_result)
+
+#PERMDISP - confirms dispersion assumption. Non-significant if meets the assumption.
+print("PERMDISP" )
+vegan::permutest(dispersion_result, permutations = 999)
+
+#Permanova result: p-value and Rsquared value (effect size).
+bray_dist <- distance(B_iw_rel_abundance, method = "bray")
+permanova_result <- vegan::adonis2(bray_dist ~ Swab_type, data = as(sample_data(B_iw_rel_abundance), "data.frame"))
+print(permanova_result)
+```
+
+#plot nmds
+```{r}
+#Run NMDS 
+B_iw_ordination_result <- ordinate(B_iw_rel_abundance, method='NMDS', distance='bray', k=4)
+
+#Check stress levels if >0.2 increase k. ideally <0.1
+B_iw_ordination_result$stress
+
+#plot Axis 1 and Axis 2
+BC_NMDS_swabs_B<-plot_ordination(B_iw_rel_abundance, B_iw_ordination_result, axes=c(1,2), color=x)+
+  geom_point(size = 3) + 
+  theme_bw(base_size = 14) +
+  scale_color_manual(values = c("Wound" = "#824599", "Intact_skin" =  "#5B991D"), labels = c("Wound" = "Wound", "Intact_skin" = "Intact skin"))+
+  labs(color = "Sample Type", title = "Bacteria")+
+  theme(axis.text = element_text(size = 10), axis.title = element_text(size = 12), legend.text = element_text(size = 12), legend.title = element_text(size = 14), title = element_text(size = 14))  
+   
+BC_NMDS_swabs_B
+```
+```{r}
+#set directory to save graph to
+setwd("/Users/laure/OneDrive - McMaster University/Kalan_lab_CO-OP/Renovoderm/paper/Figures/plots")
+
+#save as pdf
+pdf(file = "BC_NMDS_swabs_B.pdf", width = 10, height = 6)
+print(BC_NMDS_swabs_B) #replace with name of plot
+dev.off()
+
+#save as image
+png(filename = "BC_NMDS_swabs_B.png", width = 2200, height = 1400, res = 300)
+print(BC_NMDS_swabs_B) #replace with name of plot
+dev.off()
+```
+
+#S2B: Bray-Curtis NMDS skin vs wound (fungal)
+#statistical testing: check dispersion assumption and permanova
+```{r}
+#transform to relative abundance
+F_iw_rel_abundance = transform_sample_counts(F_ps_rare_2, function(x) x*100/ sum(x))
+
+#add sample_id column
+sample_data(F_iw_rel_abundance)$Sample_id <- rownames(sample_data(F_iw_rel_abundance))
+
+#remove outlier samples (samples skew data preventing full representation of rest of samples)
+F_iw_rel_abundance <- subset_samples(F_iw_rel_abundance, !Sample_id %in% c("LK-ITS-19", "LK-ITS-29"))
+                                  
+#set variable
+x = "Swab_type"
+
+#make sure all rows have a value for column x
+meta <- as(sample_data(F_iw_rel_abundance), "data.frame")
+meta_clean <- meta[!is.na(meta[[x]]), ] 
+sample_data(F_iw_rel_abundance)<-meta_clean
+
+#calculate bray-curtis distance
+bray_dist <- distance(F_iw_rel_abundance, method = "bray")
+
+#check dispersion assumption, if non-significant it means that the assumption of homogeniety of dispersion holds and we can proceed with permanova
+dispersion_result <- vegan::betadisper(bray_dist, sample_data(F_iw_rel_abundance)[[x]]) 
+
+print("anova")
+anova(dispersion_result)
+
+print("TukeyHSD")
+TukeyHSD(dispersion_result)
+
+#PERMDISP - confirms dispersion assumption. Non-significant if meets the assumption.
+print("PERMDISP" )
+vegan::permutest(dispersion_result, permutations = 999)
+
+#Permanova result: p-value and Rsquared value (effect size).
+bray_dist <- distance(F_iw_rel_abundance, method = "bray")
+permanova_result <- vegan::adonis2(bray_dist ~ Swab_type, data = as(sample_data(F_iw_rel_abundance), "data.frame"))
+print(permanova_result)
+```
+
+#plot nmds
+```{r}
+#Run NMDS 
+F_iw_ordination_result <- ordinate(F_iw_rel_abundance, method='NMDS', distance='bray', k=4)
+
+#Check stress levels if >0.2 increase k. ideally <0.1
+F_iw_ordination_result$stress
+
+#plot Axis 1 and Axis 2
+BC_NMDS_swabs_F<-plot_ordination(F_iw_rel_abundance, F_iw_ordination_result, axes=c(1,2), color=x)+
+  geom_point(size = 3) + 
+  #geom_text(aes(label = Sample_id))+
+  theme_bw(base_size = 14) +
+  scale_color_manual(values = c("Wound" = "#824599", "Intact_skin" =  "#5B991D"), labels = c("Wound" = "Wound", "Intact_skin" = "Intact skin"))+
+  labs(color = "Sample Type", title = "Fungi")+
+  theme(axis.text = element_text(size = 10), axis.title = element_text(size = 12), legend.text = element_text(size = 12), legend.title = element_text(size = 14),  title = element_text(size = 14))  
+   
+BC_NMDS_swabs_F
+```
+
+#merge supplemental figure 2
+```{r}
+Supplemental_figure2 <- BC_NMDS_swabs_B + BC_NMDS_swabs_F + plot_layout(widths = c(1,1))
+Supplemental_figure2
+```
+
+#Save plots
+```{r}
+#save plot as pdf
+setwd("C:/Users/laure/OneDrive - McMaster University/Kalan_lab_CO-OP/Renovoderm/Paper/Figures")
+
+pdf(file = "Supplemental_figure2.pdf", width = 13.33, height = 5) # Adjust dimensions as needed
+print(Supplemental_figure2) # Replace with your plot object
+dev.off()
+#Save as image
+png(filename = "Supplemental_figure2.png", width = 4000, height = 1300, res = 300)
+print(Supplemental_figure2) # Replace with your actual graph object
+dev.off()
+```
+

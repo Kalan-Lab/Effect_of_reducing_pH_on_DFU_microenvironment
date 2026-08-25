@@ -1,0 +1,195 @@
+Renovoderm_16S_processing1 
+#processing of raw 16S reads
+
+#Activate qiime 
+conda activate qiime2-amplicon-2025.10
+
+#create new directory to process samples and move into that directory
+mkdir processed_16Sdata
+cd processed_16Sdata
+
+#create new directory to save fastqs after fastp 
+mkdir trimmed
+
+##fastp
+#Create fastp for cleaning in text editor (nano). create output files first. Create loop for fastp analysis
+nano fastp
+
+#open file with fastq files
+cd Renovoderm/16S_fastqs
+
+#make folder
+mkdir fastQC
+
+#run fastq on raw sequences and save summary results to fastQC folder - run this for a refence of quality before fastp
+fastqc *.fastq.gz -o fastQC
+
+#move to fastQC directory
+cd fastQC
+
+#run multiqc on current directory
+multiqc .
+
+#move to folder with fastq files
+cd /Renovoderm/16S_fastqs
+
+#run fastp 
+for i in `ls *R1_001.fastq.gz | sed 's/.fastq.gz//g'`;
+do
+ j=`echo ${i} | sed 's/R1_001/R2_001/g'`
+ fastp -q 25 --trim_poly_g --detect_adapter_for_pe -i ${i}.fastq.gz -I ${j}.fastq.gz -o /workspace/lab/kalanlab/liel/Renovoderm/16S/processed_16Sdata/trimmed//${i}_t.fastq.gz -O /workspace/lab/kalanlab/liel/Renovoderm/16S/processed_16Sdata/trimmed/${j}_t.fastq.gz
+done
+
+#move to working directory with reads after fastp
+cd /workspace/lab/kalanlab/liel/Renovoderm/16S/processed_16Sdata/trimmed
+
+#make new directory
+mkdir -p fastQC
+
+#run fastqc
+fastqc *.fastq.gz -o fastQC
+
+#run multiqc
+multiqc .
+
+#run fastp 
+bash fastp
+
+##Make manifest file for mapping paired end reads
+nano manifest.py
+import os
+
+#provide directory where trimmed fastq.gz files are located
+directory = r"/workspace/lab/kalanlab/liel/Renovoderm/16S/processed_16Sdata/trimmed"
+
+#set name for output file
+output_file = "manifest.txt"
+
+#open output file for writing 
+with open(output_file, 'w') as f:
+	#write header
+	f.write("sample-id,absolute-filepath,direction\n")
+
+	#loop through files in directory
+	for filename in os.listdir(directory):
+		if filename.endswith("_R1_001_t.fastq.gz"):
+			#extract sample-id (before_S) and create absolute path
+			sample_id = filename.split("_S")[0]
+			abs_path = os.path.join(directory, filename)
+
+			#write forward read
+			f.write(f"{sample_id},{abs_path},forward\n")
+
+			#create reverse filename
+			reverse_filename = filename.replace("_R1_001_t.fastq.gz", "_R2_001_t.fastq.gz")
+			reverse_abs_path = os.path.join(directory, reverse_filename)
+
+			#write reverse read
+			f.write(f"{sample_id},{reverse_abs_path},reverse\n")
+#print when manifest file created successfully			
+print(f"Formatted file saved as {output_file}")
+
+#run script 
+python3 manifest.py
+
+#check manifest mapped R1 and R2 reads correctly
+ head -n 30 manifest.txt
+
+ #check sequences for empty samples (next steps will fail if any empty samples)
+qiime demux summarize \
+  --i-data sequences_q25.qza \
+  --o-visualization sequences.qzv
+
+#import manifest.txt into a qiime readable format
+qiime tools import \
+	--type "SampleData[PairedEndSequencesWithQuality]" \
+	--input-format PairedEndFastqManifestPhred33 \
+	--input-path manifest.txt \
+	--output-path sequences_q25.qza
+
+##cutadapt: remove primers from reads (primers on 5' end of R1 and R2 need to be trimmed)
+nano cutadapt.sh
+
+#provide primer sequences to trim
+qiime cutadapt trim-paired \
+        --i-demultiplexed-sequences sequences_q25.qza \
+        --p-front-f GGACTACNVGGGTWTCTAAT \  
+        --p-front-r CCTACGGGNGGCWGCAG \
+        --o-trimmed-sequences trimmed_sequences.qza \
+        --verbose
+
+#view summary of sequences and view quality to determine trimming lengths
+qiime demux summarize \
+        --i-data trimmed_sequences.qza \
+        --o-visualization trimmed_sequences.qzv
+
+#run script
+bash cutadapt.sh
+
+##DADA2
+nano DADA2.sh
+
+#Denoise, merge and trim with DADA2
+qiime dada2 denoise-paired \
+	--i-demultiplexed-seqs trimmed_sequences.qza \
+	--p-trim-left-f 0 \
+	--p-trim-left-r 0 \
+	--p-trunc-len-f 260 \
+	--p-trunc-len-r 230 \
+	--output-dir dadaout \
+	--verbose
+
+#View quality stats on sequences
+qiime metadata tabulate \
+        --m-input-file dadaout/denoising_stats.qza \
+        --o-visualization dadaout/denoising_stats.qzv
+qiime feature-table summarize \
+        --i-table dadaout/table.qza \
+        --o-visualization dadaout/table_summarize.qzv
+qiime feature-table tabulate-seqs \
+        --i-data dadaout/representative_sequences.qza \
+        --o-visualization dadaout/rep-seqs-summary.qzv
+
+#run DADA2
+bash DADA2.sh
+
+##cluster reads into OTUs
+nano cluster.sh
+
+#cluster into 97% OTUs
+qiime vsearch cluster-features-de-novo \
+       --i-sequences dadaout/representative_sequences.qza \
+       --i-table dadaout/table.qza \
+       --p-perc-identity 0.97 \ 
+       --o-clustered-table table-dada2_clust97.qza \
+       --o-clustered-sequences rep-seqs-dada2_clust97.qza
+
+#check results
+qiime feature-table summarize \
+       --i-table table-dada2_clust97.qza \
+       --o-visualization table_summarize_clust97.qzv
+
+#move files to cluster folder
+mkdir cluster
+mv table-dada2_clust97.qza cluster
+mv rep-seqs-dada2_clust97.qza cluster
+mv table_summarize_clust97.qzv cluster
+
+##classify 
+nano classify.sh
+
+#classify with GTDB
+qiime feature-classifier classify-sklearn \
+  --i-classifier /workspace/lab/kalanlab/liel/Renovoderm/16S/processed_16Sdata/trimmed/cluster/classifiers/gtdb_classifier_r220.qza \
+  --i-reads rep-seqs-dada2_clust99.qza \
+  --p-confidence 0.85 \
+  --o-classification TaxonomyFinal_clust99_gtdb.qza
+
+#View barplots to check classification 
+qiime taxa barplot \
+        --i-table table-dada2_clust99.qza \
+        --i-taxonomy TaxonomyFinal_clust99_gtdb.qza \
+        --o-visualization taxabarplot_clust99_gtdb.qzv
+
+#run 
+bash classify.sh

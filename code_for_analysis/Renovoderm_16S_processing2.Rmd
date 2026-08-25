@@ -1,0 +1,805 @@
+---
+title: "Renovoderm16S_processing"
+author: "Lauren"
+date: "2026-07-03"
+output: html_document
+---
+#final full paper processing for 16S analysis
+
+```{r}
+#Activate
+library(qiime2R)
+library(phyloseq)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(tibble)
+library(decontam)
+library (BiocManager)
+```
+
+#upload data
+```{r}
+#create phyloseq objects
+B_ps_raw <- qza_to_phyloseq(
+  features = "C:/Users/laure/OneDrive - McMaster University/Kalan_lab_CO-OP/Renovoderm/16S/processed_16Sdata/trimmed/cluster/table-dada2_clust97.qza", 
+  taxonomy = "C:/Users/laure/OneDrive - McMaster University/Kalan_lab_CO-OP/Renovoderm/16S/processed_16Sdata/trimmed/cluster/TaxonomyFinal_clust97_gtdb.qza", 
+  metadata = "C:/Users/laure/OneDrive - McMaster University/Kalan_lab_CO-OP/Renovoderm/metadata/Renovoderm_metadata_clean.txt")
+
+#check 
+print(B_ps_raw)
+
+#view each phyloseq object
+B_tax_table = as.data.frame(tax_table(B_ps_raw))
+B_meta_table = as.data.frame(sample_data(B_ps_raw))
+B_otu_table = as.data.frame(otu_table(B_ps_raw))
+```
+#view if top features across samples are identified
+```{r}
+#isolate otu table
+feature_counts <- as.data.frame(otu_table(B_ps_raw))
+
+#count cells in rows wtih values greater than zero(i.e how many samples have that feature)
+clean_row <- rowSums(feature_counts >0)
+
+#organize into descending order
+ordered_features <- clean_row[order(-clean_row)]
+
+#check data
+ordered_features
+
+#convert to dataframe
+counts_df <- data.frame(sample_counts = ordered_features)
+
+#view df
+counts_df
+
+#isolate taxonomy data
+tax_data <- data.frame(tax_table(B_ps_raw))
+
+#merge taxonomy table and feature counts
+all_feature_count <- merge(tax_data,counts_df, by="row.names", all=TRUE)
+
+#rename first column header
+colnames(all_feature_count)[1] <"OTU_ID"
+
+#remove NA
+c_feature_count <- all_feature_count %>% filter(!is.na(sample_counts))
+
+#organize in descending order
+clean_feature_counts <- c_feature_count[order(-c_feature_count$sample_counts),]
+
+#check samples
+clean_feature_counts
+```
+#Add genus names for missing top taxa; identified using BLAST+ on the NCBI website
+```{r}
+B_ps_updated <- B_ps_raw
+
+#create otu-to-genus mapping data frame
+B_otu_to_genus<-data.frame(
+  OTU_ID = c("c2594f1ec76737e5296cf25021e2bbd9","a254712cee74b64452c08384146faf6a", "3bd0a301dcab1808e9f6224b72fe52e1", "8a4525e6390fc968d73850ec594c3e9a", "8ae1f6e4244b4a94be7a2e4106cba72f", "cc83e58db632318dbb91bbaa5ca22968", "fbc55529321453d010d3554729c2b22b", "099d5bc8846138b02376b961cf8f34e6", "0995ece489598caed5121ade0a870dee","ba0f498208470462c00507bb168104be","e865219f81b517488a5f155488d02391","3ab9348c7b30c38fa1917c8b22e843b5", "a586f6feb230d749ca4ea8422684383e", "b30ccc443ecf0c55e90abbcbbc7d88ef", "044f2a9f6ca991100b2b9087ac35fad4", "24274e30457e597001a1817901ad1818", "6afce98e6cd76d03f99392780daf9bc9"), 
+  Genus = c("Kocuria", "Enterococcus", "Serratia", "Paracoccus", "f_Rhizobiaceae", "f_Burkholderiaceae", "Raoutella", "c_Saccharofermentanales","Peptoniphilus","Porphyromonas","Pseudomonas","Peptoniphilus", "Porphyromonas", "Moraxella", "Hymphomicrobium", "Pseudomonas", "f_Propionibacteriaceae")) 
+
+#extract the taxonomy table from the phyloseq object
+tax_table_df <- as.data.frame(tax_table(B_ps_updated))
+
+#update the Genus column based on the OTU-to-Genus mapping
+tax_table_df$Genus <- ifelse(
+  rownames(tax_table_df) %in% B_otu_to_genus$OTU_ID, 
+  B_otu_to_genus$Genus[match(rownames(tax_table_df), B_otu_to_genus$OTU_ID)], 
+  tax_table_df$Genus)
+
+#replace the updated taxonomy table in the phyloseq object
+tax_table(B_ps_updated) <- as.matrix(tax_table_df)
+
+#view the updated taxonomy table for the specific OTUs
+tax_table_df[B_otu_to_genus$OTU_ID, ]
+
+B_ps_updated
+```
+#Only keep bacteria
+```{r}
+#create copy
+ps_bacteria <- B_ps_updated
+
+#access taxonomy
+B_taxonomy <- data.frame(tax_table(ps_bacteria))
+
+#see how many are not bacteria
+taxa_non_bacteria <- subset(B_taxonomy, Kingdom != "d__Bacteria")
+print("how many non bacteria")
+nrow(taxa_non_bacteria)
+
+#keep only bacteria
+B_taxonomy_filtered <- subset(B_taxonomy, Kingdom == "d__Bacteria")
+
+#how many removed
+print("how many removed")
+nrow(B_taxonomy) - nrow(B_taxonomy_filtered)
+
+#update phyloseq
+tax_table(ps_bacteria) <- as.matrix(B_taxonomy_filtered)
+ps_bacteria
+```
+
+#View distribution of taxonomic identification
+```{r}
+#exrtact taxa table
+B_unidentified_taxa <- tax_table(ps_bacteria)
+
+#count total identified at each taxonomic rank
+B_identified <-colSums(!is.na(B_unidentified_taxa))
+
+#make new df with identified counts at each rank
+B_labeled_counts<-data.frame(Identified = B_identified)
+B_taxonomy_set<- rownames_to_column(B_labeled_counts, var="Taxonomy Level")
+B_taxonomy_set
+
+#extract value for "Kingdom" in the "Identified" column for total
+B_total<-B_taxonomy_set$Identified[B_taxonomy_set$`Taxonomy Level` =="Kingdom"]
+
+#calculate percent of identified taxa at each level, relative to kingdom level
+x<-B_taxonomy_set$Identified
+B_taxonomy_set$`Percent Identified`<- x/B_total*100
+
+#set order in taxonomic level column
+B_taxonomy_set$`Taxonomy Level`<-factor(B_taxonomy_set$`Taxonomy Level`, levels = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"))
+
+#plot results
+B_taxonomy_graph <- ggplot(B_taxonomy_set, aes(x=`Taxonomy Level`, y=`Percent Identified`))+
+  geom_bar(stat="identity", fill="steelblue")+
+  theme_classic()+
+  labs(title = "Percent of features identified at each taxonomic level", x= "Taxonomic Level", y= "Percent Identified")+
+  theme(strip.background = element_blank(), axis.text.x.bottom = element_text(angle = -90))
+B_taxonomy_graph
+```
+
+#remove empty samples (PREP FOR FILTERING BY PREVALENCE)
+```{r}
+B_remove_empty1_ps<-ps_bacteria
+
+#isolate otu table
+otu_table<-otu_table(B_remove_empty1_ps)
+
+#view empty samples (won't run when no empty samples)
+empty_samples<-otu_table[,colSums(otu_table)<1]
+colnames(empty_samples)
+
+#remove empty samples
+clean_otu1<- otu_table[,colSums(otu_table)>0]
+
+#look at feature and sample distribution
+print("feature counts distribution")
+summary(rowSums(clean_otu1))
+
+print("feature counts in samples distribution")
+summary(colSums(clean_otu1))
+
+#update phyloseq
+otu_table(B_remove_empty1_ps)<-clean_otu1
+B_remove_empty1_ps
+```
+
+#Filter by prevalence
+#check otu counts
+```{r}
+#extract otu table
+otu_table <- otu_table(B_remove_empty1_ps)
+
+#Count number of samples each OTU is present in
+otu_count <- rowSums(otu_table >0)
+
+#select OTU IDs present in exactly 1 sample and count how many
+unique_otus <- names(otu_count[otu_count == 1])
+length(unique_otus)
+
+#Keep only otus present in 1 sample
+B_ps_unique_otus <- prune_taxa(unique_otus, B_remove_empty1_ps)
+
+#remove empty samples
+B_ps_unique_otus_c<-prune_samples(sample_sums(B_ps_unique_otus)>0, B_ps_unique_otus)
+
+#distribution of counts of unique otus
+print("sample counts of unique otus")
+summary(sample_sums(B_ps_unique_otus_c))
+
+#sort sums from low to high
+sort(sample_sums(B_ps_unique_otus_c))
+```
+
+#check relative abundance of unique OTUs
+```{r}
+#calculate relative abundance of OTUs
+ps_rel_abundance <- transform_sample_counts(B_remove_empty1_ps, function(x) x*100/ sum(x))
+
+#extract otu table
+otu_table <- otu_table(ps_rel_abundance)
+
+#Count number of samples each OTU is present in
+otu_count <- rowSums(otu_table >0)
+
+#Select OTU IDs present in exactly 1 samples and count how many
+unique_otus <- names(otu_count[otu_count == 1])
+length(unique_otus)
+
+#Keep only otus present in 1 sample
+B_ps_unique_otus <- prune_taxa(unique_otus, ps_rel_abundance)
+
+#remove empty samples
+B_ps_unique_otus_c<-prune_samples(sample_sums(B_ps_unique_otus)>0, B_ps_unique_otus)
+
+#distribution of unique otus
+print("sample counts of unique otus")
+summary(sample_sums(B_ps_unique_otus_c))
+
+#sort sums from low to high
+sort(sample_sums(B_ps_unique_otus_c))
+```
+
+#filter by prevalence (remove OTUs present in only 1 sample)
+```{r}
+#isolate otu table
+otu_table<-otu_table(B_remove_empty1_ps)
+
+#check number of taxa
+print("number of taxa")
+nrow(otu_table)
+
+#remove low prevalent taxa
+clean_otu1 <- otu_table[rowSums(otu_table > 0) >= 2, ]
+
+#check number of taxa
+print("number of taxa left")
+nrow(clean_otu1)
+print("number of taxa removed")
+nrow(otu_table)-nrow(clean_otu1)
+
+#view empty samples (won't run when no empty samples)
+empty_samples<-clean_otu1[,colSums(clean_otu1)<1]
+colnames(empty_samples)
+
+#remove empty samples
+clean_otu2<- clean_otu1[,colSums(clean_otu1)>0]
+
+#look at feature and sample distribution
+print("feature counts distribution")
+summary(rowSums(clean_otu2))
+
+print("feature counts in samples distribution")
+summary(colSums(clean_otu2))
+
+#update phyloseq
+otu_table(B_remove_empty1_ps)<-clean_otu2
+B_remove_empty1_ps
+```
+
+#Filter out contaminants
+```{r}
+#separate metadata
+B_filter_ps <- B_remove_empty1_ps
+sample_data<-sample_data(B_filter_ps)
+
+#change all negative controls to "Neg"
+sample_data$Subject_id<-gsub("NEG", "Neg",sample_data$Subject_id)
+
+#update phyloseq object
+sample_data(B_filter_ps)<-sample_data
+
+#identify negative controls and creates an "is.neg column
+sample_data(B_filter_ps)$is.neg <- sample_data(B_filter_ps)$Subject_id == "Neg"
+
+#filter contaminants based on prevalence in negative controls in comparison to samples
+B_contamdf.prev <- isContaminant(B_filter_ps, method = "prevalence", neg= "is.neg")
+
+print("number of contaminant taxa")
+table(B_contamdf.prev$contaminant)
+
+#prune taxa to only contain non-contaminated sequences
+print("after contaminant cleaning")
+B_ps.noncontam <- prune_taxa(!B_contamdf.prev$contaminant, B_filter_ps)
+B_ps.noncontam
+```
+
+#View contaminated taxa
+```{r}
+#extract contaminant taxa (TRUE)
+B_contaminants <- rownames(B_contamdf.prev[B_contamdf.prev$contaminant == TRUE, ])
+
+#Extract taxonomy for contaminant taxa
+B_contaminant_taxa <- tax_table(B_filter_ps)[B_contaminants, ]
+
+#view counts of contaminants across samples before removal
+names<-rownames(B_contaminant_taxa) 
+count_present<-clean_otu2[rownames(clean_otu2) %in% names, ]
+total_count_present<-rowSums(count_present)
+total_count_present
+summary(total_count_present)
+
+#view taxonomy of contaminants
+print("contaminant taxa")
+B_contaminant_taxa
+```
+#remove negative and positive controls from analysis 
+```{r}
+#create new phyloseq object without negative controls
+B_ps_clean <- prune_samples(sample_data(B_ps.noncontam)$Sex != "N/A", B_ps.noncontam)
+
+#check resulting phyloseq object
+B_no_controls <- sample_data(B_ps_clean)$Subject_id
+B_no_controls
+B_ps_clean
+```
+#Remove empty samples
+```{r}
+B_remove_empty2_ps <- B_ps_clean
+
+#remove empty samples 
+B_remove_empty2_ps <- prune_samples(sample_sums(B_remove_empty2_ps) >0, B_remove_empty2_ps)
+B_remove_empty2_ps
+```
+
+#view summary stats on samples for future analysis
+```{r}
+#extract metadata
+B_sample_analysis <- B_remove_empty2_ps
+meta_raw<- sample_data(B_sample_analysis)
+
+#wound sample summary
+print("Wound samples")
+wound<-subset_samples(meta_raw, Swab_type=="Wound")
+nrow(wound)
+print("wound total patients")
+length(unique(wound$Subject_id))
+
+#intact skin sample summary
+print("intact skin samples")
+intact<-subset_samples(meta_raw, Swab_type=="Intact_skin")
+nrow(intact)
+print("intact skin total patients")
+length(unique(intact$Subject_id))
+
+#summary at each visit
+print("wound visit breakdown")
+wound_visit<-wound
+print("V1")
+nrow(subset(wound_visit, Visit=="V1"))
+print("V3")
+nrow(subset(wound_visit, Visit=="V3"))
+print("V5")
+nrow(subset(wound_visit, Visit=="V5"))
+
+print("intact skin visit breakdown")
+intact_visit<-intact
+print("V1")
+nrow(subset(intact_visit, Visit=="V1"))
+print("V3")
+nrow(subset(intact_visit, Visit=="V3"))
+print("V5")
+nrow(subset(intact_visit, Visit=="V5"))
+
+#sample summary
+summary(sample_sums(B_sample_analysis))
+```
+#Prepare for normalization
+#check if sample types have different sampling depths
+```{r}
+B_ps_counts<-B_sample_analysis
+
+#extract otu table and sum total counts
+otu_counts<-otu_table(B_ps_counts)
+
+#sum feature count for each sample
+total_counts<-colSums(otu_counts)
+summary(total_counts)
+
+#combine metadata with total counts
+metadata<-sample_data(B_ps_counts)
+metadata$counts<-total_counts
+
+#make sure counts are numeric
+metadata$counts<-as.numeric(metadata$counts)
+
+#list comparisons for wilcox test
+comparisons<- list(c("Intact_skin","Wound"))
+
+#visualize difference in counts
+B_swab_type_counts<-ggplot(metadata, aes(x=Swab_type, y=counts, fill=Swab_type))+
+  geom_boxplot()+
+  theme_classic()+
+  labs(title = "Swab type count Distribution", x = "Swab_type", y = "Total Counts", fill="Swab_type")+
+  theme(strip.background = element_blank()) +
+  stat_compare_means(method = "wilcox",
+                     label = "p.signif",
+                     size = 4,
+                    comparisons = comparisons)
+B_swab_type_counts
+```
+#subset wound and intact skin samples
+```{r}
+#Subset wound samples
+B_ps_wound <- subset_samples(B_sample_analysis, Swab_type=="Wound")
+
+#check all wound samples
+sam_wound <- sample_data(B_ps_wound)
+sam_wound
+
+#extract otu table
+wound_otu <-otu_table(B_ps_wound) 
+
+#check number of empty features
+sum(rowSums(wound_otu)<1)
+
+#remove empty features
+wound_otu_c<-wound_otu[rowSums(wound_otu)>0,]
+
+#check number of empty features
+sum(rowSums(wound_otu_c)<1)
+
+#update ps object
+otu_table(B_ps_wound) <- wound_otu_c
+B_ps_wound
+
+#summary of features
+summary(rowSums(wound_otu_c))
+```
+
+#all samples (intact skin and wound): prep otu table
+```{r}
+B_ps_all_samples<-B_sample_analysis
+
+#isolate OTU table
+otus<-as.matrix(otu_table(B_ps_all_samples))
+
+#flip otu table
+flipped_otu<-t(otus)
+flipped_clean_otus<-as.data.frame(flipped_otu)
+flipped_clean_otus
+
+#generate rarefaction curves
+vegan::rarecurve(flipped_clean_otus, step = 5, col = "blue", cex = 0.5, label =TRUE, ylim =c(0,100), xlim =c(0,2900))
+```
+
+#all samples: removal for rarefaction minimum
+```{r}
+#removal samples bellow minimum
+clean_otu<- otus[,colSums(otus) > 2900]
+
+#look a count distribution in samples after removal
+clean_otu_stats<-summary(colSums(clean_otu))
+
+print("distribution of features across samples")
+clean_otu_stats
+
+print("percent of samples maintained")
+ncol(clean_otu)/ncol(otus)
+```
+
+#all samples: check sample distribution with rarefaction minimum cutoff
+```{r}
+#extract meta table
+B_ps_min_removed<-B_ps_all_samples  #use for all samples
+otu_table(B_ps_min_removed)<-clean_otu
+meta_raw<-sample_data(B_ps_min_removed)
+
+#wound sample summary
+print("Wound samples")
+wound<-subset_samples(meta_raw, Swab_type=="Wound")
+nrow(wound)
+print("wound total patients")
+length(unique(wound$Subject_id))
+
+#intact skin sample summary
+print("intact skin samples")
+intact<-subset_samples(meta_raw, Swab_type=="Intact_skin")
+nrow(intact)
+print("intact skin total patients")
+length(unique(intact$Subject_id))
+
+#summary at each visit
+print("wound visit breakdown")
+wound_visit<-wound
+print("V1")
+nrow(subset(wound_visit, Visit=="V1"))
+print("V3")
+nrow(subset(wound_visit, Visit=="V3"))
+print("V5")
+nrow(subset(wound_visit, Visit=="V5"))
+
+print("intact skin visit breakdown")
+intact_visit<-intact
+print("V1")
+nrow(subset(intact_visit, Visit=="V1"))
+print("V3")
+nrow(subset(intact_visit, Visit=="V3"))
+print("V5")
+nrow(subset(intact_visit, Visit=="V5"))
+
+#sample summary
+summary(sample_sums(B_ps_min_removed))
+```
+
+#all samples: remove empty features
+```{r}
+#check number of empty features
+sum(rowSums(clean_otu)<1)
+
+#remove empty features
+clean_otu_c<-clean_otu[rowSums(clean_otu)>0,]
+
+#check numnber of empty features
+sum(rowSums(clean_otu_c)<1)
+
+#summary of features
+summary(rowSums(clean_otu_c))
+```
+
+#Wound samples only: prep otu table
+```{r}
+#isolate OTU table
+otus<-as.matrix(otu_table(B_ps_wound))
+
+#flip otu table
+flipped_otu<-t(otus)
+flipped_clean_otus<-as.data.frame(flipped_otu)
+flipped_clean_otus
+
+#generate rarefaction curves
+vegan::rarecurve(flipped_clean_otus, step = 5, col = "blue", cex = 0.5, label =TRUE, ylim =c(0,100), xlim =c(0,23000))
+```
+
+#Wound samples: save non-rarefied without minimum
+```{r}
+B_ps_nr_min23000<-B_ps_wound
+
+#update otu table
+otu_table(B_ps_nr_min23000) <- clean_otu_c
+
+print("ps_nr_min23000")
+B_ps_nr_min23000
+```
+
+#all samples: save non-rarefied without minimum
+```{r}
+B_ps_nr_min2900<-B_ps_all_samples
+
+#update otu table
+otu_table(B_ps_nr_min2900) <- clean_otu_c
+
+print("B_ps_nr_min2900")
+B_ps_nr_min2900
+```
+
+#all samples: rarefaction
+```{r}
+#switch columns and header names
+df_matrix <- as.matrix(clean_otu_c)
+c_flipped_clean_otu <- t(df_matrix)
+c_flipped_clean_otu<-as.data.frame(c_flipped_clean_otu)
+
+#check changes
+c_flipped_clean_otu
+
+#determine the minimum total number of individuals
+min_sample_size<- min(rowSums(c_flipped_clean_otu))
+min_sample_size
+
+#generate multiple rarefied OTU table (3 different sub-samples)
+B_rarefied_otu_data1 <- vegan::rrarefy(c_flipped_clean_otu, min_sample_size)
+B_rarefied_otu_data2 <- vegan::rrarefy(c_flipped_clean_otu, min_sample_size)
+B_rarefied_otu_data3 <- vegan::rrarefy(c_flipped_clean_otu, min_sample_size)
+```
+
+#Wound samples: rarefaction
+```{r}
+#switch columns and header names
+df_matrix <- as.matrix(clean_otu_c)
+c_flipped_clean_otu <- t(df_matrix)
+c_flipped_clean_otu<-as.data.frame(c_flipped_clean_otu)
+
+#check changes
+c_flipped_clean_otu
+
+#determine the minimum total number of individuals
+min_sample_size<- min(rowSums(c_flipped_clean_otu))
+min_sample_size
+
+#generate multiple rarefied OTU table (3 different sub-samples)
+B_w_rarefied_otu_data1 <- vegan::rrarefy(c_flipped_clean_otu, min_sample_size)
+B_w_rarefied_otu_data2 <- vegan::rrarefy(c_flipped_clean_otu, min_sample_size)
+B_w_rarefied_otu_data3 <- vegan::rrarefy(c_flipped_clean_otu, min_sample_size)
+```
+
+#All samples: remove empty features
+```{r}
+#check number of empty features
+sum(colSums(B_rarefied_otu_data1)<1)
+
+#remove empty features
+B_rarefied_otu_data1<-B_rarefied_otu_data1[,colSums(B_rarefied_otu_data1)>0]
+
+#check number of empty features
+sum(colSums(B_rarefied_otu_data2)<1)
+
+#remove empty features
+B_rarefied_otu_data2<-B_rarefied_otu_data2[,colSums(B_rarefied_otu_data2)>0]
+
+#check number of empty features
+sum(colSums(B_rarefied_otu_data3)<1)
+
+#remove empty features
+B_rarefied_otu_data3<-B_rarefied_otu_data3[,colSums(B_rarefied_otu_data3)>0]
+```
+
+```{r}
+#View summary of features
+stats_rare_1<- colSums(B_rarefied_otu_data1)
+stats_rare_2<- colSums(B_rarefied_otu_data2)
+stats_rare_3<- colSums(B_rarefied_otu_data3)
+
+#View summary of samples
+stats_raref_1<- rowSums(B_rarefied_otu_data1)
+stats_raref_2<- rowSums(B_rarefied_otu_data2)
+stats_raref_3<- rowSums(B_rarefied_otu_data3)
+
+print("feature summary")
+summary(stats_rare_1)
+summary(stats_rare_2)
+summary(stats_rare_3)
+
+print("sample summary")
+summary(stats_raref_1)
+summary(stats_raref_2)
+summary(stats_raref_3)
+```
+
+#all samples: update phyloseq objects
+```{r}
+B_ps_rare_1 <- B_ps_all_samples
+B_ps_rare_2 <- B_ps_all_samples
+B_ps_rare_3 <- B_ps_all_samples
+
+#transpose rarefied otu tables
+otu1 <- t(B_rarefied_otu_data1)
+otu1 <- otu_table(otu1, taxa_are_rows =  TRUE)
+otu_table(B_ps_rare_1) <- otu1
+
+otu2 <- t(B_rarefied_otu_data2)
+otu2 <- otu_table(otu2, taxa_are_rows =  TRUE)
+otu_table(B_ps_rare_2) <- otu2
+
+otu3 <- t(B_rarefied_otu_data3)
+otu3 <- otu_table(otu3, taxa_are_rows =  TRUE)
+otu_table(B_ps_rare_3) <- otu3
+
+print("rarefaction_1")
+B_ps_rare_1
+print("rarefaction_2")
+B_ps_rare_2
+print("rarefaction_3")
+B_ps_rare_3
+```
+
+#Wound samples: remove empty features
+```{r}
+#check number of empty features
+sum(colSums(B_w_rarefied_otu_data1)<1)
+
+#remove empty features
+B_w_rarefied_otu_data1<-B_w_rarefied_otu_data1[,colSums(B_w_rarefied_otu_data1)>0]
+
+#check number of empty features
+sum(colSums(B_w_rarefied_otu_data2)<1)
+
+#remove empty features
+B_w_rarefied_otu_data2<-B_w_rarefied_otu_data2[,colSums(B_w_rarefied_otu_data2)>0]
+
+#check number of empty features
+sum(colSums(B_w_rarefied_otu_data3)<1)
+
+#remove empty features
+B_w_rarefied_otu_data3<-B_w_rarefied_otu_data3[,colSums(B_w_rarefied_otu_data3)>0]
+```
+
+```{r}
+#View summary of features
+stats_rare_1<- colSums(B_w_rarefied_otu_data1)
+stats_rare_2<- colSums(B_w_rarefied_otu_data2)
+stats_rare_3<- colSums(B_w_rarefied_otu_data3)
+
+#View summary of samples
+stats_raref_1<- rowSums(B_w_rarefied_otu_data1)
+stats_raref_2<- rowSums(B_w_rarefied_otu_data2)
+stats_raref_3<- rowSums(B_w_rarefied_otu_data3)
+
+print("feature summary")
+summary(stats_rare_1)
+summary(stats_rare_2)
+summary(stats_rare_3)
+
+print("sample summary")
+summary(stats_raref_1)
+summary(stats_raref_2)
+summary(stats_raref_3)
+```
+
+#Wound samples: update phyloseq objects
+```{r}
+B_w_ps_rare_1 <- B_ps_wound
+B_w_ps_rare_2 <- B_ps_wound
+B_w_ps_rare_3 <- B_ps_wound
+
+#transpose rarefied otu tables
+otu1 <- t(B_w_rarefied_otu_data1)
+otu1 <- otu_table(otu1, taxa_are_rows =  TRUE)
+otu_table(B_w_ps_rare_1) <- otu1
+
+otu2 <- t(B_w_rarefied_otu_data2)
+otu2 <- otu_table(otu2, taxa_are_rows =  TRUE)
+otu_table(B_w_ps_rare_2) <- otu2
+
+otu3 <- t(B_w_rarefied_otu_data3)
+otu3 <- otu_table(otu3, taxa_are_rows =  TRUE)
+otu_table(B_w_ps_rare_3) <- otu3
+
+print("rarefaction_1")
+B_w_ps_rare_1
+print("rarefaction_2")
+B_w_ps_rare_2
+print("rarefaction_3")
+B_w_ps_rare_3
+```
+
+#merge to genus level
+
+#Wound samples: non-rarefied cutoff minimum for wound samples
+```{r}
+#Add a different number for all NA in Genus
+Genus_unknown<-B_ps_nr_min23000
+
+# Extract the taxonomy table from the phyloseq object
+tax_table_cleaned <- as.data.frame(tax_table(Genus_unknown))
+
+# Add a unique number to the NA values in the Phylum column
+tax_table_cleaned$Genus[is.na(tax_table_cleaned$Genus)] <- paste("Unknown_genus", seq_along(tax_table_cleaned$Genus[is.na(tax_table_cleaned$Genus)]), sep="_")
+
+# Update the taxonomy table in the phyloseq object
+tax_table(Genus_unknown) <- as.matrix(tax_table_cleaned)
+
+#Filter only unique Genus names (merge species with same names)
+unique_genus<-tax_glom(Genus_unknown, taxrank="Genus")
+
+B_ps_nr_min23000genus<-unique_genus
+
+print("B_ps_nr_min23000")
+B_ps_nr_min23000
+print("B_ps_nr_min23000genus")
+B_ps_nr_min23000genus
+``` 
+
+#rarefaction data
+```{r}
+#do this for the 3 rarefaction groups
+#Add a different number for all NA in Genus
+Genus_unknown<-B_w_ps_rare_1
+
+# Extract the taxonomy table from the phyloseq object
+tax_table_cleaned <- as.data.frame(tax_table(Genus_unknown))
+
+# Add a unique number to the NA values in the Phylum column
+tax_table_cleaned$Genus[is.na(tax_table_cleaned$Genus)] <- paste("Unknown_genus", seq_along(tax_table_cleaned$Genus[is.na(tax_table_cleaned$Genus)]), sep="_")
+
+# Update the taxonomy table in the phyloseq object
+tax_table(Genus_unknown) <- as.matrix(tax_table_cleaned)
+
+#Filter only unique Genus names (merge species with same names)
+unique_genus<-tax_glom(Genus_unknown, taxrank="Genus")
+
+B_w_ps_rare_1_genus<-unique_genus
+
+print("B_w_ps_rare_1_genus")
+B_w_ps_rare_1_genus
+print("B_w_ps_rare_1")
+B_w_ps_rare_1
+``` 
