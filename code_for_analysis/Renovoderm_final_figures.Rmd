@@ -20,7 +20,7 @@ library("tidyverse")
 #Import metadata
 ```{r}
 #upload metadata as a data frame
-metadata_df <-as.data.frame(read_excel("C:/Users/laure/OneDrive - McMaster University/Kalan_lab_CO-OP/Renovoderm/metadata/Renovoderm_metadata_clean.xlsx", na = "N/A"))
+metadata_df <-as.data.frame(read_excel("C:/Projects/Renovoderm/files/Renovoderm_metadata_clean.xlsx", na = "N/A"))
 
 metadata_df
 ```
@@ -39,6 +39,7 @@ V1_metadata_df <- subset(w_metadata_df, Visit =="V1")
 ```{r}
 V1_metadata_df$preD_pH <- as.numeric(V1_metadata_df$preD_pH)
 V1_metadata_df$postD_volume <- as.numeric(V1_metadata_df$postD_volume)
+V1_metadata_df$postD_area <- as.numeric(V1_metadata_df$postD_area)
 V1_metadata_df$BMI <- as.numeric(V1_metadata_df$BMI)
 V1_metadata_df$HbA1c <- as.numeric(V1_metadata_df$HbA1c)
 V1_metadata_df$Age <- as.numeric(V1_metadata_df$Age)
@@ -54,6 +55,8 @@ Tab1 <- V1_metadata_df %>%
     mean(preD_pH),
     range(postD_volume),
     mean(postD_volume),
+    range(postD_area),
+    mean(postD_area),
     mean(BMI),
     sd(BMI),
     mean(HbA1c),
