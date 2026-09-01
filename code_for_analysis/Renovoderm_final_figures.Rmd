@@ -549,14 +549,6 @@ Fungal_Genus_plot
 ```
 
 #3D: Subject Fungal Bray-Curtis NMDS plot
-```{r}
-F_rare1<- F_ps_rare_1
-#over write the file
-F_ps_rare_1 <- F_ps_rare_2
-
-##need to save F_rare1 as F_ps_rare_2
-```
-
 #set testing parameters
 ```{r}
 #set rownames as sample_id
